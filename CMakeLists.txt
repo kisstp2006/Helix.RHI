@@ -15,6 +15,12 @@ if(HELIX_PLATFORM STREQUAL "windows")
 endif()
 
 helix_add_test_suite(helix_rhi_tests DEPS Helix::RHI)
+if(TARGET helix_rhi_tests AND HELIX_PLATFORM STREQUAL "windows")
+    get_target_property(rhi_test_sources helix_rhi_tests SOURCES)
+    helix_add_executable(helix_rhi_tests_discrete_gpu SOURCES ${rhi_test_sources} examples/discrete_gpu.cpp DEPS Helix::RHI Helix::TestMain)
+    target_include_directories(helix_rhi_tests_discrete_gpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    add_test(NAME helix_rhi_tests_discrete_gpu COMMAND helix_rhi_tests_discrete_gpu)
+endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     helix_add_executable(helix_rhi_triangle SOURCES examples/triangle.cpp DEPS Helix::RHI)

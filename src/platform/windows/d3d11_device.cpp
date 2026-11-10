@@ -134,6 +134,31 @@ namespace helix::rhi
             p = nullptr;
         }
 
+        IDXGIAdapter1* HardwareAdapter(u32 index)
+        {
+            if (!LoadLibraries())
+                return nullptr;
+            IDXGIFactory2* factory = nullptr;
+            if (Failed(CreateDXGIFactory2(0, IDXGIFactory2::Iid, reinterpret_cast<void**>(&factory))))
+                return nullptr;
+            IDXGIAdapter1* result = nullptr;
+            u32 hardware = 0;
+            IDXGIAdapter1* adapter = nullptr;
+            for (UINT i = 0; Succeeded(factory->EnumAdapters1(i, &adapter)); i++)
+            {
+                DXGI_ADAPTER_DESC1 d{};
+                adapter->GetDesc1(&d);
+                if (!(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) && hardware++ == index)
+                {
+                    result = adapter;
+                    break;
+                }
+                Release(adapter);
+            }
+            Release(factory);
+            return result;
+        }
+
         class D3D11Device final : public Device
         {
         public:
@@ -169,11 +194,16 @@ namespace helix::rhi
                 const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
                 UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | (desc.debug ? D3D11_CREATE_DEVICE_DEBUG : 0);
                 D3D_FEATURE_LEVEL level{};
-                HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels, 4, D3D11_SDK_VERSION, &device, &level, &context);
+                IDXGIAdapter1* chosen = desc.adapter >= 0 ? HardwareAdapter(u32(desc.adapter)) : nullptr;
+                if (desc.adapter >= 0 && !chosen)
+                    return false;
+                D3D_DRIVER_TYPE driver = chosen ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+                HRESULT hr = D3D11CreateDevice(chosen, driver, nullptr, flags, levels, 4, D3D11_SDK_VERSION, &device, &level, &context);
                 if (Failed(hr) && desc.debug)
-                    hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags & ~UINT(D3D11_CREATE_DEVICE_DEBUG), levels, 4,
+                    hr = D3D11CreateDevice(chosen, driver, nullptr, flags & ~UINT(D3D11_CREATE_DEVICE_DEBUG), levels, 4,
                                            D3D11_SDK_VERSION, &device, &level, &context);
-                if (Failed(hr))
+                Release(chosen);
+                if (Failed(hr) && desc.adapter < 0)
                     hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, 4, D3D11_SDK_VERSION,
                                            &device, &level, &context);
                 if (Failed(hr))
@@ -853,6 +883,18 @@ namespace helix::rhi
     }
 
     bool D3D11Available() { return LoadLibraries(); }
+
+    bool D3D11AdapterName(u32 index, char* out, usize size)
+    {
+        IDXGIAdapter1* adapter = HardwareAdapter(index);
+        if (!adapter)
+            return false;
+        DXGI_ADAPTER_DESC1 d{};
+        adapter->GetDesc1(&d);
+        std::snprintf(out, size, "%ls", d.Description);
+        Release(adapter);
+        return true;
+    }
 
     Device* CreateD3D11Device(const DeviceDesc& desc)
     {

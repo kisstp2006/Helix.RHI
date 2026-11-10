@@ -59,6 +59,18 @@ namespace
         u32 At(u32 x, u32 y) const { return pixels[y * kSize + x]; }
     };
 
+    // Float to UNORM8 conversion may round either way within the tolerance the APIs allow.
+    bool NearColor(u32 a, u32 b)
+    {
+        for (int shift = 0; shift < 32; shift += 8)
+        {
+            int ca = int((a >> shift) & 0xFF), cb = int((b >> shift) & 0xFF);
+            if (ca - cb > 1 || cb - ca > 1)
+                return false;
+        }
+        return true;
+    }
+
     template <typename F>
     void ForEachBackend(F&& f)
     {
@@ -69,14 +81,21 @@ namespace
                 continue;
             if (!Device::IsBackendAvailable(b))
                 continue;
-            Device* device = Device::Create({.backend = b, .vsync = false});
-            if (!device)
+            char name[128];
+            u32 adapters = 0;
+            while (b == Backend::D3D11 && Device::AdapterName(b, adapters, name, sizeof(name)))
+                adapters++;
+            for (i32 adapter = adapters ? 0 : -1; adapter < i32(adapters); adapter++)
             {
-                std::printf("    %s: device creation failed, skipped\n", BackendName(b));
-                continue;
+                Device* device = Device::Create({.backend = b, .adapter = adapter, .vsync = false});
+                if (!device)
+                {
+                    std::printf("    %s: device creation failed, skipped\n", BackendName(b));
+                    continue;
+                }
+                f(*device);
+                Device::Destroy(device);
             }
-            f(*device);
-            Device::Destroy(device);
         }
     }
 
@@ -114,8 +133,8 @@ HX_TEST(RHI, ClearAndReadBack)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
-        HX_CHECK_EQ(t.At(0, 0), 0xffbf8040u);
-        HX_CHECK_EQ(t.At(15, 15), 0xffbf8040u);
+        HX_CHECK(NearColor(t.At(0, 0), 0xffbf8040u));
+        HX_CHECK(NearColor(t.At(15, 15), 0xffbf8040u));
     });
 }
 

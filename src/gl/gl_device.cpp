@@ -243,6 +243,12 @@ namespace helix::rhi
             {
                 if (!context)
                     return;
+                if (!vao)
+                {
+                    DestroyGLContext(context);
+                    context = nullptr;
+                    return;
+                }
                 buffers.ForEach([](Buffer& b) { glDeleteBuffers(1, &b.id); });
                 textures.ForEach([](Texture& t) { glDeleteTextures(1, &t.id); });
                 samplers.ForEach([](Sampler& s) { glDeleteSamplers(1, &s.id); });

@@ -6,6 +6,14 @@ namespace helix::rhi
     Device* CreateGLDevice(const DeviceDesc& desc);
     bool D3D11Available();
     bool GLAvailable(Backend backend);
+    bool D3D11AdapterName(u32 index, char* out, usize size);
+
+    bool Device::AdapterName(Backend backend, u32 index, char* out, usize size)
+    {
+        if (backend == Backend::D3D11)
+            return D3D11AdapterName(index, out, size);
+        return false;
+    }
 
     bool Device::IsBackendAvailable(Backend backend)
     {

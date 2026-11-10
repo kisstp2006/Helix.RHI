@@ -3,6 +3,15 @@
 #include <helix/platform/window.h>
 #include <helix/rhi/command_list.h>
 
+// Put once in an executable to ask hybrid graphics laptops for the discrete GPU (also for OpenGL).
+#if HX_PLATFORM_WINDOWS
+#define HX_RHI_PREFER_DISCRETE_GPU()                                                \
+    extern "C" __declspec(dllexport) unsigned long NvOptimusEnablement = 1;         \
+    extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1
+#else
+#define HX_RHI_PREFER_DISCRETE_GPU() static_assert(true)
+#endif
+
 namespace helix::rhi
 {
     struct DeviceDesc
@@ -10,6 +19,8 @@ namespace helix::rhi
         Backend backend = Backend::D3D11;
         // Optional for D3D11 and desktop GL (a hidden window or pbuffer is used), required for WebGL 2 and Android.
         platform::NativeWindowHandle window{};
+        // D3D11 adapter index as listed by AdapterName; -1 lets the system choose.
+        i32 adapter = -1;
         bool debug = false;
         bool vsync = true;
         u32 transientBufferSize = 8u << 20;
@@ -21,6 +32,8 @@ namespace helix::rhi
         static Device* Create(const DeviceDesc& desc);
         static void Destroy(Device* device);
         static bool IsBackendAvailable(Backend backend);
+        // Hardware adapters of a backend; false when the index is past the end.
+        static bool AdapterName(Backend backend, u32 index, char* out, usize size);
 
         virtual ~Device() = default;
         virtual const DeviceCaps& Caps() const = 0;
