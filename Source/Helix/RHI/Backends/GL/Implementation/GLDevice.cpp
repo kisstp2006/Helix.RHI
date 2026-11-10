@@ -1003,11 +1003,8 @@ namespace helix::rhi
                 attributesDirty = true;
             }
 
-            void ApplyFrontFace()
-            {
-                bool flip = offscreen && caps.clipControl;
-                glFrontFace((frontCounterClockwise != flip) ? GL_CCW : GL_CW);
-            }
+            // An upper left clip origin also turns the facing test around, so the winding stays as in Direct3D.
+            void ApplyFrontFace() { glFrontFace(frontCounterClockwise ? GL_CCW : GL_CW); }
 
             void SetupAttributes(u32 firstInstance)
             {

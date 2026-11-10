@@ -54,6 +54,43 @@ HX_TEST(RHI, TriangleOrientationMatchesAcrossBackends)
     });
 }
 
+// Clockwise triangles are front faces by default: culling back faces keeps this one, culling front faces removes it.
+HX_TEST(RHI, CullingMatchesAcrossBackends)
+{
+    ForEachBackend([](Device& d) {
+        ShaderHandle vs = MakeShader(d, kColorVertex);
+        ShaderHandle fs = MakeShader(d, kColorFragment);
+        HX_REQUIRE(vs.IsValid() && fs.IsValid());
+        const f32 verts[] = {-1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, -1, 0, 1, 0, 0, 1};
+        BufferHandle vb = d.CreateBuffer({.size = sizeof(verts), .usage = BufferVertex, .initialData = verts});
+        for (CullMode cull : {CullMode::Back, CullMode::Front})
+            for (bool counterClockwise : {false, true})
+            {
+                PipelineDesc pd = ColorPipeline(vs, fs);
+                pd.cull = cull;
+                pd.frontCounterClockwise = counterClockwise;
+                PipelineHandle pipe = d.CreatePipeline(pd);
+                HX_REQUIRE(pipe.IsValid());
+                Target t(&d);
+                CommandList cl;
+                cl.BeginRenderPass(t.Pass());
+                cl.SetPipeline(pipe);
+                cl.SetVertexBuffer(0, vb);
+                cl.Draw(3);
+                cl.EndRenderPass();
+                d.Submit(cl);
+                HX_REQUIRE(t.Read());
+                bool front = !counterClockwise;
+                bool kept = (cull == CullMode::Back) == front;
+                HX_CHECK_EQ(t.At(1, 1), kept ? 0xff0000ffu : 0x00000000u);
+                d.Destroy(pipe);
+            }
+        d.Destroy(vb);
+        d.Destroy(vs);
+        d.Destroy(fs);
+    });
+}
+
 HX_TEST(RHI, UniformsFromTransientMemory)
 {
     ForEachBackend([&](Device& d) {
