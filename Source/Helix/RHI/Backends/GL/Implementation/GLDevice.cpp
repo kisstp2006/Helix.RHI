@@ -1032,7 +1032,8 @@ namespace helix::rhi
                 else
                     glDisable(GL_BLEND);
                 glColorMask((b.writeMask & 1) != 0, (b.writeMask & 2) != 0, (b.writeMask & 4) != 0, (b.writeMask & 8) != 0);
-                if (api.PolygonMode)
+                // OpenGL ES has no polygon mode, though some loaders still find the desktop entry point.
+                if (api.PolygonMode && caps.backend == Backend::OpenGL)
                     glPolygonMode(GL_FRONT_AND_BACK, d.wireframe ? GL_LINE : GL_FILL);
                 attributesDirty = true;
             }
