@@ -1,4 +1,5 @@
 #include <Helix/RHI/Bindless/Implementation/BindlessTable.h>
+#include <Helix/RHI/Resources/Implementation/RangeAllocator.h>
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
 #include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
 
@@ -94,6 +95,8 @@ namespace helix::rhi
             ID3D11ShaderResourceView* srv = nullptr;
             ID3D11UnorderedAccessView* uav = nullptr;
             BufferDesc desc{};
+            u32 heapOffset = 0;
+            bool inHeap = false;
         };
 
         struct Texture
@@ -235,6 +238,24 @@ namespace helix::rhi
             ID3D11ShaderResourceView* textureSrvs[kMaxTextureSlots] = {};
             ID3D11SamplerState* textureSamplers[kMaxTextureSlots] = {};
             Pipeline* computePipeline = nullptr;
+            struct VertexBinding
+            {
+                ID3D11Buffer* buffer = nullptr;
+                UINT stride = 0, offset = 0;
+            } vertexBindings[kMaxVertexBuffers];
+            ID3D11Buffer* indexBuffer = nullptr;
+            DXGI_FORMAT indexFormat = DXGI_FORMAT_R16_UINT;
+            UINT indexOffset = 0;
+
+            u32 heapSize = 0;
+            ID3D11Buffer* heap = nullptr;
+            ID3D11ShaderResourceView* heapSrv = nullptr;
+            ID3D11UnorderedAccessView* heapUav = nullptr;
+            RangeAllocator heapRanges;
+            BindlessTable<BindlessBufferEntry> bufferTable;
+            ID3D11Buffer* bufferTableBuffer = nullptr;
+            ID3D11ShaderResourceView* bufferTableSrv = nullptr;
+            u32 bufferTableCapacity = 0;
 
             GpuTimerFrames timers;
             Array<ID3D11Query*> timestampQueries[GpuTimerFrames::kFrames];
@@ -272,6 +293,8 @@ namespace helix::rhi
                 caps.storageBuffers = caps.compute;
                 caps.drawIndirect = caps.compute;
                 caps.gpuTimers = true;
+                caps.bindlessBuffers = caps.compute;
+                heapSize = desc.bindlessBufferHeapSize;
                 caps.baseInstance = true;
                 caps.clipControl = true;
                 caps.textureCompressionBC = true;
@@ -363,6 +386,8 @@ namespace helix::rhi
                 if (context)
                     context->ClearState();
                 buffers.ForEach([](Buffer& b) {
+                    if (b.inHeap)
+                        b.buffer = nullptr;
                     Release(b.uav);
                     Release(b.srv);
                     Release(b.buffer);
@@ -386,6 +411,11 @@ namespace helix::rhi
                 }
                 Release(bindlessSrv);
                 Release(bindlessBuffer);
+                Release(bufferTableSrv);
+                Release(bufferTableBuffer);
+                Release(heapUav);
+                Release(heapSrv);
+                Release(heap);
                 Release(backBufferRtv);
                 Release(swapChain);
                 Release(context1);
@@ -407,8 +437,114 @@ namespace helix::rhi
 
             const DeviceCaps& Caps() const override { return caps; }
 
+            bool EnsureHeap()
+            {
+                if (heap)
+                    return true;
+                D3D11_BUFFER_DESC bd{heapSize, D3D11_USAGE_DEFAULT,
+                                     D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0,
+                                     D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, 0};
+                if (Failed(device->CreateBuffer(&bd, nullptr, &heap)))
+                    return false;
+                heapSrv = RawSrv(heap, 0, heapSize);
+                heapUav = RawUav(heap, 0, heapSize);
+                heapRanges.Reset(heapSize);
+                return heapSrv && heapUav;
+            }
+
+            ID3D11ShaderResourceView* RawSrv(ID3D11Buffer* buffer, u32 offset, u32 size)
+            {
+                D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+                sd.Format = DXGI_FORMAT_R32_TYPELESS;
+                sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+                sd.BufferEx = {offset / 4, UINT(AlignUp(size, 4) / 4), UINT(D3D11_BUFFEREX_SRV_FLAG_RAW)};
+                ID3D11ShaderResourceView* view = nullptr;
+                device->CreateShaderResourceView(buffer, &sd, &view);
+                return view;
+            }
+
+            ID3D11UnorderedAccessView* RawUav(ID3D11Buffer* buffer, u32 offset, u32 size)
+            {
+                D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+                ud.Format = DXGI_FORMAT_R32_TYPELESS;
+                ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+                ud.Buffer = {offset / 4, UINT(AlignUp(size, 4) / 4), UINT(D3D11_BUFFER_UAV_FLAG_RAW)};
+                ID3D11UnorderedAccessView* view = nullptr;
+                device->CreateUnorderedAccessView(buffer, &ud, &view);
+                return view;
+            }
+
+            BufferHandle CreateHeapBuffer(const BufferDesc& desc)
+            {
+                if (!caps.bindlessBuffers || desc.memory != MemoryType::GpuOnly || desc.usage & BufferUniform || !EnsureHeap())
+                    return {};
+                u64 offset = heapRanges.Allocate(desc.size, kBindlessBufferAlignment);
+                if (offset == RangeAllocator::kInvalid)
+                    return {};
+                Buffer b;
+                b.buffer = heap;
+                b.desc = desc;
+                b.desc.initialData = nullptr;
+                b.heapOffset = u32(offset);
+                b.inHeap = true;
+                if (desc.initialData)
+                {
+                    D3D11_BOX box{u32(offset), 0, 0, u32(offset + desc.size), 1, 1};
+                    context->UpdateSubresource(heap, 0, &box, desc.initialData, 0, 0);
+                }
+                if (desc.usage & BufferStorage)
+                {
+                    b.srv = RawSrv(heap, u32(offset), u32(desc.size));
+                    b.uav = RawUav(heap, u32(offset), u32(desc.size));
+                }
+                return buffers.Add(Move(b));
+            }
+
+            u32 RegisterBindlessBuffer(BufferHandle handle) override
+            {
+                Buffer* b = buffers.Get(handle);
+                if (!b || !b->inHeap)
+                    return kInvalidBindlessIndex;
+                return bufferTable.Add({b->heapOffset, u32(b->desc.size)});
+            }
+
+            void UnregisterBindlessBuffer(u32 index) override
+            {
+                BindlessBufferEntry e;
+                bufferTable.Remove(index, e);
+            }
+
+            void UploadBufferTable()
+            {
+                if (!heap)
+                    return;
+                if (bufferTable.Dirty() || !bufferTableBuffer)
+                {
+                    if (bufferTable.Size() > bufferTableCapacity || !bufferTableBuffer)
+                    {
+                        Release(bufferTableSrv);
+                        Release(bufferTableBuffer);
+                        bufferTableCapacity = Max(bufferTable.Size() * 2, 1024u);
+                        D3D11_BUFFER_DESC bd{bufferTableCapacity * 8, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
+                                             D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 8};
+                        if (Failed(device->CreateBuffer(&bd, nullptr, &bufferTableBuffer)) ||
+                            Failed(device->CreateShaderResourceView(bufferTableBuffer, nullptr, &bufferTableSrv)))
+                            return;
+                    }
+                    if (bufferTable.Size())
+                    {
+                        D3D11_BOX box{0, 0, 0, bufferTable.Size() * 8, 1, 1};
+                        context->UpdateSubresource(bufferTableBuffer, 0, &box, bufferTable.Data(), 0, 0);
+                    }
+                    bufferTable.ClearDirty();
+                }
+                storageSrvsDirty = true;
+            }
+
             BufferHandle CreateBuffer(const BufferDesc& desc) override
             {
+                if (desc.bindless)
+                    return CreateHeapBuffer(desc);
                 D3D11_BUFFER_DESC bd{};
                 bd.ByteWidth = UINT(desc.usage & BufferUniform ? AlignUp(desc.size, 16) : desc.size);
                 bd.Usage = desc.memory == MemoryType::Upload ? D3D11_USAGE_DYNAMIC : desc.memory == MemoryType::Readback ? D3D11_USAGE_STAGING : D3D11_USAGE_DEFAULT;
@@ -715,6 +851,11 @@ namespace helix::rhi
                 Buffer b;
                 if (buffers.Remove(h, b))
                 {
+                    if (b.inHeap)
+                    {
+                        heapRanges.Free(b.heapOffset, b.desc.size, kBindlessBufferAlignment);
+                        b.buffer = nullptr;
+                    }
                     Release(b.uav);
                     Release(b.srv);
                     Release(b.buffer);
@@ -917,6 +1058,12 @@ namespace helix::rhi
                     return;
                 context->VSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
                 context->PSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
+                if (heap)
+                {
+                    ID3D11ShaderResourceView* views[2] = {bufferTableSrv, heapSrv};
+                    context->VSSetShaderResources(kBindlessD3D11BufferTableRegister, 2, views);
+                    context->PSSetShaderResources(kBindlessD3D11BufferTableRegister, 2, views);
+                }
                 storageSrvsDirty = false;
             }
 
@@ -937,11 +1084,21 @@ namespace helix::rhi
                 context->CSSetShaderResources(0, kMaxTextureSlots, textureSrvs);
                 context->CSSetSamplers(0, kMaxTextureSlots, textureSamplers);
                 context->CSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
-                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots, storageUavs, nullptr);
+                ID3D11UnorderedAccessView* uavs[kMaxStorageSlots + 1] = {};
+                for (u32 i = 0; i < kMaxStorageSlots; i++)
+                    uavs[i] = storageUavs[i];
+                uavs[kBindlessD3D11BufferHeapUavRegister] = heapUav;
+                if (heap)
+                    context->CSSetShaderResources(kBindlessD3D11BufferTableRegister, 1, &bufferTableSrv);
+                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots + 1, uavs, nullptr);
                 dispatch();
-                ID3D11UnorderedAccessView* none[kMaxStorageSlots] = {};
-                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots, none, nullptr);
+                ID3D11UnorderedAccessView* none[kMaxStorageSlots + 1] = {};
+                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots + 1, none, nullptr);
                 storageSrvsDirty = true;
+                // Binding a UAV unbinds the same buffer from the input assembler, so restore it.
+                for (u32 i = 0; i < kMaxVertexBuffers; i++)
+                    context->IASetVertexBuffers(i, 1, &vertexBindings[i].buffer, &vertexBindings[i].stride, &vertexBindings[i].offset);
+                context->IASetIndexBuffer(indexBuffer, indexFormat, indexOffset);
             }
 
             ID3D11UnorderedAccessView* TextureUav(Texture& t, u32 mip)
@@ -1037,6 +1194,7 @@ namespace helix::rhi
             {
                 UploadTransient();
                 UploadBindless();
+                UploadBufferTable();
                 Pipeline* pipeline = nullptr;
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)
@@ -1116,16 +1274,20 @@ namespace helix::rhi
                     {
                         const CmdSetVertexBuffer& c = CommandData<CmdSetVertexBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        UINT stride = pipeline ? pipeline->strides[c.slot] : 0, offset = c.offset;
+                        UINT stride = pipeline ? pipeline->strides[c.slot] : 0, offset = c.offset + (b ? b->heapOffset : 0);
                         ID3D11Buffer* buffer = b ? b->buffer : nullptr;
                         context->IASetVertexBuffers(c.slot, 1, &buffer, &stride, &offset);
+                        vertexBindings[c.slot] = {buffer, stride, offset};
                         break;
                     }
                     case CommandType::SetIndexBuffer:
                     {
                         const CmdSetIndexBuffer& c = CommandData<CmdSetIndexBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        context->IASetIndexBuffer(b ? b->buffer : nullptr, c.type == IndexType::U16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT, c.offset);
+                        indexBuffer = b ? b->buffer : nullptr;
+                        indexFormat = c.type == IndexType::U16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+                        indexOffset = c.offset + (b ? b->heapOffset : 0);
+                        context->IASetIndexBuffer(indexBuffer, indexFormat, indexOffset);
                         break;
                     }
                     case CommandType::SetUniformBuffer:
@@ -1187,7 +1349,8 @@ namespace helix::rhi
                         }
                         else
                         {
-                            D3D11_BOX box{c.offset, 0, 0, c.offset + c.size, 1, 1};
+                            u32 at = c.offset + b->heapOffset;
+                            D3D11_BOX box{at, 0, 0, at + c.size, 1, 1};
                             bool whole = b->desc.usage & BufferUniform;
                             context->UpdateSubresource(b->buffer, 0, whole ? nullptr : &box, bytes, 0, 0);
                         }
@@ -1200,8 +1363,9 @@ namespace helix::rhi
                         Buffer* dst = buffers.Get(c.destination);
                         if (src && dst)
                         {
-                            D3D11_BOX box{c.sourceOffset, 0, 0, c.sourceOffset + c.size, 1, 1};
-                            context->CopySubresourceRegion(dst->buffer, 0, c.destinationOffset, 0, 0, src->buffer, 0, &box);
+                            u32 from = c.sourceOffset + src->heapOffset;
+                            D3D11_BOX box{from, 0, 0, from + c.size, 1, 1};
+                            context->CopySubresourceRegion(dst->buffer, 0, c.destinationOffset + dst->heapOffset, 0, 0, src->buffer, 0, &box);
                         }
                         break;
                     }
@@ -1237,7 +1401,7 @@ namespace helix::rhi
                     {
                         const CmdIndirect& c = CommandData<CmdIndirect>(data);
                         if (Buffer* b = buffers.Get(c.buffer))
-                            RunCompute([&] { context->DispatchIndirect(b->buffer, c.offset); });
+                            RunCompute([&] { context->DispatchIndirect(b->buffer, c.offset + b->heapOffset); });
                         break;
                     }
                     case CommandType::DrawIndirect:
@@ -1251,9 +1415,9 @@ namespace helix::rhi
                         for (u32 i = 0; i < c.drawCount; i++)
                         {
                             if (type == CommandType::DrawIndirect)
-                                context->DrawInstancedIndirect(b->buffer, c.offset + i * c.stride);
+                                context->DrawInstancedIndirect(b->buffer, b->heapOffset + c.offset + i * c.stride);
                             else
-                                context->DrawIndexedInstancedIndirect(b->buffer, c.offset + i * c.stride);
+                                context->DrawIndexedInstancedIndirect(b->buffer, b->heapOffset + c.offset + i * c.stride);
                         }
                         break;
                     }
@@ -1305,6 +1469,7 @@ namespace helix::rhi
                 ID3D11Buffer* staging = nullptr;
                 if (Failed(device->CreateBuffer(&bd, nullptr, &staging)))
                     return false;
+                offset += b->heapOffset;
                 D3D11_BOX box{offset, 0, 0, offset + size, 1, 1};
                 context->CopySubresourceRegion(staging, 0, 0, 0, 0, b->buffer, 0, &box);
                 D3D11_MAPPED_SUBRESOURCE m{};

@@ -84,6 +84,8 @@ namespace helix::rhi
         u32 usage = 0;
         MemoryType memory = MemoryType::GpuOnly;
         u32 structureStride = 0;
+        // Suballocates from the bindless buffer heap (GPU only memory; vertex, index, storage and indirect use; raw views on D3D11).
+        bool bindless = false;
         const void* initialData = nullptr;
         StringView debugName;
     };
@@ -411,6 +413,7 @@ namespace helix::rhi
         bool bindlessTextures = false;
         bool bindlessEmulated = false;
         u32 maxBindlessTextures = 0;
+        bool bindlessBuffers = false;
         bool baseInstance = false;
         bool uniformBufferOffsets = false;
         bool persistentMapping = false;

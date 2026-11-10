@@ -25,6 +25,8 @@ namespace helix::rhi
         bool debug = false;
         bool vsync = true;
         u32 transientBufferSize = 8u << 20;
+        // Size of the bindless buffer heap, allocated on the first bindless buffer.
+        u32 bindlessBufferHeapSize = 64u << 20;
     };
 
     class Device
@@ -54,6 +56,9 @@ namespace helix::rhi
         // Returns a bindless index for a sampled texture and sampler, kInvalidBindlessIndex when unsupported.
         virtual u32 RegisterBindless(TextureHandle texture, SamplerHandle sampler) = 0;
         virtual void UnregisterBindless(u32 index) = 0;
+        // Index of a bindless buffer in the buffer table, kInvalidBindlessIndex when the buffer is not in the heap.
+        virtual u32 RegisterBindlessBuffer(BufferHandle buffer) = 0;
+        virtual void UnregisterBindlessBuffer(u32 index) = 0;
 
         // Per-frame upload memory for uniform data; valid until the frame that allocated it has been executed by the GPU.
         virtual TransientAllocation AllocateTransient(u32 size) = 0;

@@ -1,4 +1,5 @@
 #include <Helix/RHI/Bindless/Implementation/BindlessTable.h>
+#include <Helix/RHI/Resources/Implementation/RangeAllocator.h>
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
 #include <Helix/RHI/Backends/GL/Implementation/GLContext.h>
 #include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
@@ -115,6 +116,8 @@ namespace helix::rhi
         {
             GLuint id = 0;
             BufferDesc desc{};
+            u32 heapOffset = 0;
+            bool inHeap = false;
         };
 
         struct Texture
@@ -197,6 +200,14 @@ namespace helix::rhi
             Array<GLuint> timestampQueries[GpuTimerFrames::kFrames];
             bool timerExt = false;
 
+            u32 heapSize = 0;
+            u32 heapAlignment = kBindlessBufferAlignment;
+            GLuint heap = 0;
+            RangeAllocator heapRanges;
+            BindlessTable<BindlessBufferEntry> bufferTable;
+            GLuint bufferTableId = 0;
+            u32 bufferTableCapacity = 0;
+
             bool Init(const DeviceDesc& desc)
             {
                 vsync = desc.vsync;
@@ -223,6 +234,17 @@ namespace helix::rhi
                 caps.drawIndirect = !web && (es ? at(3, 1) : at(4, 0)) && api.DrawArraysIndirect && api.DrawElementsIndirect;
                 timerExt = es && HasExtension("GL_EXT_disjoint_timer_query") && api.QueryCounterEXT && api.GetQueryObjectui64vEXT;
                 caps.gpuTimers = !web && (es ? timerExt : api.QueryCounter && api.GetQueryObjectui64v && api.GetQueryObjectuiv);
+                if (caps.storageBuffers)
+                {
+                    GLint bindings = 0, vertexBlocks = 0, fragmentBlocks = 0, ssboAlignment = 0;
+                    glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &bindings);
+                    glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &vertexBlocks);
+                    glGetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &fragmentBlocks);
+                    glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssboAlignment);
+                    caps.bindlessBuffers = bindings > GLint(kBindlessGLBufferHeapBinding) && vertexBlocks >= 3 && fragmentBlocks >= 3;
+                    heapAlignment = Max(kBindlessBufferAlignment, u32(ssboAlignment));
+                }
+                heapSize = desc.bindlessBufferHeapSize;
                 caps.multiDrawIndirect = !es && (at(4, 3) || HasExtension("GL_ARB_multi_draw_indirect"));
                 caps.bindlessTextures = HasExtension("GL_ARB_bindless_texture") && at(4, 3) && api.GetTextureSamplerHandleARB &&
                                         api.MakeTextureHandleResidentARB;
@@ -268,7 +290,14 @@ namespace helix::rhi
                     context = nullptr;
                     return;
                 }
-                buffers.ForEach([](Buffer& b) { glDeleteBuffers(1, &b.id); });
+                buffers.ForEach([](Buffer& b) {
+                    if (!b.inHeap)
+                        glDeleteBuffers(1, &b.id);
+                });
+                if (heap)
+                    glDeleteBuffers(1, &heap);
+                if (bufferTableId)
+                    glDeleteBuffers(1, &bufferTableId);
                 textures.ForEach([](Texture& t) { glDeleteTextures(1, &t.id); });
                 samplers.ForEach([](Sampler& s) { glDeleteSamplers(1, &s.id); });
                 shaders.ForEach([](Shader& s) { glDeleteShader(s.id); });
@@ -291,8 +320,75 @@ namespace helix::rhi
 
             const DeviceCaps& Caps() const override { return caps; }
 
+            BufferHandle CreateHeapBuffer(const BufferDesc& desc)
+            {
+                if (!caps.bindlessBuffers || desc.memory != MemoryType::GpuOnly || desc.usage & BufferUniform)
+                    return {};
+                if (!heap)
+                {
+                    glGenBuffers(1, &heap);
+                    glBindBuffer(GL_COPY_WRITE_BUFFER, heap);
+                    glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(heapSize), nullptr, GL_STATIC_DRAW);
+                    heapRanges.Reset(heapSize);
+                }
+                u64 offset = heapRanges.Allocate(desc.size, heapAlignment);
+                if (offset == RangeAllocator::kInvalid)
+                    return {};
+                if (desc.initialData)
+                {
+                    glBindBuffer(GL_COPY_WRITE_BUFFER, heap);
+                    glBufferSubData(GL_COPY_WRITE_BUFFER, GLintptr(offset), GLsizeiptr(desc.size), desc.initialData);
+                }
+                Buffer b;
+                b.id = heap;
+                b.desc = desc;
+                b.desc.initialData = nullptr;
+                b.heapOffset = u32(offset);
+                b.inHeap = true;
+                return buffers.Add(Move(b));
+            }
+
+            u32 RegisterBindlessBuffer(BufferHandle handle) override
+            {
+                Buffer* b = buffers.Get(handle);
+                if (!b || !b->inHeap)
+                    return kInvalidBindlessIndex;
+                return bufferTable.Add({b->heapOffset, u32(b->desc.size)});
+            }
+
+            void UnregisterBindlessBuffer(u32 index) override
+            {
+                BindlessBufferEntry e;
+                bufferTable.Remove(index, e);
+            }
+
+            void UploadBufferTable()
+            {
+                if (!heap)
+                    return;
+                if (!bufferTableId)
+                    glGenBuffers(1, &bufferTableId);
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, bufferTableId);
+                if (bufferTable.Dirty() || !bufferTableCapacity)
+                {
+                    u32 bytes = bufferTable.Size() * u32(sizeof(BindlessBufferEntry));
+                    if (bytes > bufferTableCapacity || !bufferTableCapacity)
+                    {
+                        bufferTableCapacity = Max(bytes * 2, 4096u);
+                        glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(bufferTableCapacity), nullptr, GL_DYNAMIC_DRAW);
+                    }
+                    if (bytes)
+                        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, GLsizeiptr(bytes), bufferTable.Data());
+                    bufferTable.ClearDirty();
+                }
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kBindlessGLBufferTableBinding, bufferTableId);
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kBindlessGLBufferHeapBinding, heap);
+            }
+
             BufferHandle CreateBuffer(const BufferDesc& desc) override
             {
+                if (desc.bindless)
+                    return CreateHeapBuffer(desc);
                 Buffer b;
                 b.desc = desc;
                 b.desc.initialData = nullptr;
@@ -479,7 +575,11 @@ namespace helix::rhi
             void Destroy(BufferHandle h) override
             {
                 Buffer b;
-                if (buffers.Remove(h, b))
+                if (!buffers.Remove(h, b))
+                    return;
+                if (b.inHeap)
+                    heapRanges.Free(b.heapOffset, b.desc.size, heapAlignment);
+                else
                     glDeleteBuffers(1, &b.id);
             }
 
@@ -808,6 +908,7 @@ namespace helix::rhi
             {
                 UploadTransient();
                 UploadBindless();
+                UploadBufferTable();
                 glBindVertexArray(vao);
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)
@@ -886,7 +987,7 @@ namespace helix::rhi
                     {
                         const CmdSetVertexBuffer& c = CommandData<CmdSetVertexBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        VertexBinding next{b ? b->id : 0, c.offset};
+                        VertexBinding next{b ? b->id : 0, c.offset + (b ? b->heapOffset : 0)};
                         if (vertexBuffers[c.slot].buffer != next.buffer || vertexBuffers[c.slot].offset != next.offset)
                         {
                             vertexBuffers[c.slot] = next;
@@ -900,7 +1001,7 @@ namespace helix::rhi
                         Buffer* b = buffers.Get(c.buffer);
                         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b ? b->id : 0);
                         indexType = c.type == IndexType::U16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
-                        indexOffset = c.offset;
+                        indexOffset = c.offset + (b ? b->heapOffset : 0);
                         break;
                     }
                     case CommandType::SetUniformBuffer:
@@ -962,7 +1063,7 @@ namespace helix::rhi
                         if (Buffer* b = buffers.Get(c.buffer))
                         {
                             glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
-                            glBufferSubData(GL_COPY_WRITE_BUFFER, GLintptr(c.offset), GLsizeiptr(c.size), data + sizeof(CmdUpdateBuffer));
+                            glBufferSubData(GL_COPY_WRITE_BUFFER, GLintptr(c.offset + b->heapOffset), GLsizeiptr(c.size), data + sizeof(CmdUpdateBuffer));
                         }
                         break;
                     }
@@ -976,7 +1077,8 @@ namespace helix::rhi
                         {
                             glBindBuffer(GL_COPY_READ_BUFFER, src->id);
                             glBindBuffer(GL_COPY_WRITE_BUFFER, dst->id);
-                            glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GLintptr(c.sourceOffset), GLintptr(c.destinationOffset), GLsizeiptr(c.size));
+                            glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, GLintptr(c.sourceOffset + src->heapOffset),
+                                                GLintptr(c.destinationOffset + dst->heapOffset), GLsizeiptr(c.size));
                         }
                         break;
                     }
@@ -986,7 +1088,11 @@ namespace helix::rhi
                     {
                         const CmdSetStorageBuffer& c = CommandData<CmdSetStorageBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        if (caps.storageBuffers && c.slot < kMaxStorageSlots)
+                        if (!caps.storageBuffers || c.slot >= kMaxStorageSlots)
+                            break;
+                        if (b && b->inHeap)
+                            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, c.slot, b->id, GLintptr(b->heapOffset), GLsizeiptr(b->desc.size));
+                        else
                             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, c.slot, b ? b->id : 0);
                         break;
                     }
@@ -1021,7 +1127,7 @@ namespace helix::rhi
                             if (!b)
                                 break;
                             glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, b->id);
-                            glDispatchComputeIndirect(GLintptr(c.offset));
+                            glDispatchComputeIndirect(GLintptr(c.offset + b->heapOffset));
                         }
                         barrierPending = true;
                         break;
@@ -1036,7 +1142,7 @@ namespace helix::rhi
                         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, b->id);
                         GLenum mode = ToTopology(pipeline->desc.topology);
                         bool indexed = type == CommandType::DrawIndexedIndirect;
-                        const void* offset = reinterpret_cast<const void*>(uptr(c.offset));
+                        const void* offset = reinterpret_cast<const void*>(uptr(c.offset + b->heapOffset));
                         if (caps.multiDrawIndirect && c.drawCount > 1)
                         {
                             if (indexed)
@@ -1047,7 +1153,7 @@ namespace helix::rhi
                         }
                         for (u32 i = 0; i < c.drawCount; i++)
                         {
-                            const void* at = reinterpret_cast<const void*>(uptr(c.offset + i * c.stride));
+                            const void* at = reinterpret_cast<const void*>(uptr(b->heapOffset + c.offset + i * c.stride));
                             if (indexed)
                                 glDrawElementsIndirect(mode, indexType, at);
                             else
@@ -1109,6 +1215,7 @@ namespace helix::rhi
                     return false;
                 Barrier();
                 glBindBuffer(GL_COPY_READ_BUFFER, b->id);
+                offset += b->heapOffset;
                 if (api.GetBufferSubData)
                 {
                     glGetBufferSubData(GL_COPY_READ_BUFFER, GLintptr(offset), GLsizeiptr(size), out);

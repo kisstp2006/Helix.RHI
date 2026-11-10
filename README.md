@@ -27,6 +27,22 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
   D3D11 binds UAVs only for the duration of a dispatch.
 - Requires D3D11 feature level 11_0, OpenGL 4.3 or OpenGL ES 3.1 (`DeviceCaps::compute`, `drawIndirect`); WebGL 2 has none.
 
+## Bindless buffers
+
+Buffers created with `BufferDesc::bindless` are suballocated from one raw heap per device (`DeviceDesc::bindlessBufferHeapSize`,
+64 MB by default, 256 byte aligned) and stay normal buffers for vertex, index, storage, indirect, update, copy and read use.
+`RegisterBindlessBuffer` returns an index into a table of byte `(offset, size)` pairs, so shaders reach any buffer without a
+binding:
+
+| Backend | Table | Heap |
+|---|---|---|
+| D3D11 | `StructuredBuffer<uint2>` at `t125` | `ByteAddressBuffer` at `t126`, `RWByteAddressBuffer` at `u7` in compute |
+| GL | SSBO binding 8, `uvec2[]` | SSBO binding 9, `uint[]` |
+
+In compute shaders on D3D11, read bindless buffers through the heap UAV rather than a read-only storage binding of the same
+buffer. Requires `DeviceCaps::bindlessBuffers` (D3D11 feature level 11_0, GL 4.3 with storage blocks in vertex and fragment
+shaders).
+
 ## GPU timers
 
 `BeginGpuScope(name)` and `EndGpuScope()` nest; frames end at `EndFrame`. `ReadGpuTimings` returns the scopes of the newest
@@ -42,7 +58,7 @@ recorded on the profiler track `GPU`. Available on D3D11, OpenGL 3.3+ and OpenGL
 | `Source/Helix/RHI/CommandList/` | `CommandList.h` |
 | `Source/Helix/RHI/Device/` | `Device.h`, device creation and backend selection |
 | `Source/Helix/RHI/Bindless/` | `Bindless.h`, descriptor table shared by both backends |
-| `Source/Helix/RHI/Resources/` | Handle pools |
+| `Source/Helix/RHI/Resources/` | Handle pools, range allocator of the bindless buffer heap |
 | `Source/Helix/RHI/Timing/` | Timestamp query frames shared by both backends |
 | `Source/Helix/RHI/Backends/D3D11/`, `Backends/GL/` | Backends, context creation in `Platform/<Os>/` |
 | `Tests/` | Device tests by topic, `Tests/Support/` holds the test device, shaders and the discrete GPU entry point |
@@ -79,7 +95,7 @@ device->Present();
 
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
-quads, depth testing, swap chain presentation, bindless textures, compute into storage buffers and
+quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
 textures, a GPU driven indirect draw, GPU timer scopes and a 10000 draw benchmark. D3D11 tests compile
 their HLSL with the operating system compiler; it is never linked into the library.
 
