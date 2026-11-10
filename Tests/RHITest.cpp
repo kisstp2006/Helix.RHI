@@ -260,6 +260,93 @@ HX_TEST(RHI, InstancedIndexedQuads)
     });
 }
 
+// A depth texture written in one pass and read with a comparison sampler in the next: a shadow map.
+HX_TEST(RHI, ShadowMapFromDepthTexture)
+{
+    ForEachBackend([&](Device& d) {
+        ShaderHandle casterVs = MakeShader(d, kDepthVertex), casterFs = MakeShader(d, kDepthFragment);
+        ShaderHandle receiverVs = MakeShader(d, kShadowReceiverVertex), receiverFs = MakeShader(d, kShadowReceiverFragment);
+        HX_REQUIRE(casterVs.IsValid() && casterFs.IsValid() && receiverVs.IsValid() && receiverFs.IsValid());
+        PipelineDesc caster;
+        caster.vertexShader = casterVs;
+        caster.fragmentShader = casterFs;
+        caster.vertexBuffers[0] = {8, StepMode::Vertex};
+        caster.vertexBufferCount = 1;
+        caster.attributes[0] = {0, 0, VertexFormat::Float2, 0};
+        caster.attributeCount = 1;
+        caster.depthTest = true;
+        caster.depthWrite = true;
+        caster.depthCompare = CompareFunction::Less;
+        caster.depthFormat = rhi::Format::D32Float;
+        caster.topology = PrimitiveTopology::TriangleStrip;
+        PipelineDesc receiver = caster;
+        receiver.vertexShader = receiverVs;
+        receiver.fragmentShader = receiverFs;
+        receiver.depthTest = false;
+        receiver.depthWrite = false;
+        receiver.depthFormat = rhi::Format::Unknown;
+        PipelineHandle casterPipe = d.CreatePipeline(caster), receiverPipe = d.CreatePipeline(receiver);
+        HX_REQUIRE(casterPipe.IsValid() && receiverPipe.IsValid());
+
+        // The caster covers the left half at depth 0.25; the rest of the map keeps the cleared 1.
+        const f32 left[] = {-1, -1, -1, 1, 0, -1, 0, 1};
+        const f32 full[] = {-1, -1, -1, 1, 1, -1, 1, 1};
+        BufferHandle leftVb = d.CreateBuffer({.size = sizeof(left), .usage = BufferVertex, .initialData = left});
+        BufferHandle fullVb = d.CreateBuffer({.size = sizeof(full), .usage = BufferVertex, .initialData = full});
+        TextureHandle map = d.CreateTexture({.format = rhi::Format::D32Float, .width = kSize, .height = kSize, .usage = TextureDepthStencil | TextureSampled});
+        TextureHandle scratch = d.CreateTexture({.format = rhi::Format::RGBA8Unorm, .width = kSize, .height = kSize, .usage = TextureRenderTarget});
+        SamplerHandle compare = d.CreateSampler({.minFilter = Filter::Nearest, .magFilter = Filter::Nearest, .mipFilter = Filter::Nearest,
+                                                 .addressU = AddressMode::ClampToEdge, .addressV = AddressMode::ClampToEdge,
+                                                 .compare = true, .compareFunction = CompareFunction::LessEqual});
+        HX_REQUIRE(map.IsValid() && scratch.IsValid() && compare.IsValid());
+
+        CommandList cl;
+        RenderPassDesc shadowPass;
+        shadowPass.colors[0].texture = scratch;
+        shadowPass.depth.texture = map;
+        cl.BeginRenderPass(shadowPass);
+        cl.SetPipeline(casterPipe);
+        cl.SetVertexBuffer(0, leftVb);
+        struct Caster
+        {
+            f32 color[4];
+            f32 depth, pad[3];
+        } casterData{{1, 1, 1, 1}, 0.25f, {}};
+        TransientAllocation c = d.AllocateTransient(sizeof(casterData));
+        std::memcpy(c.data, &casterData, sizeof(casterData));
+        cl.SetUniformBuffer(0, c);
+        cl.Draw(4);
+        cl.EndRenderPass();
+
+        // The receiver is at 0.5: behind the caster on the left (shadowed, green), in front of nothing on the right (red).
+        Target t(&d);
+        cl.BeginRenderPass(t.Pass());
+        cl.SetPipeline(receiverPipe);
+        cl.SetVertexBuffer(0, fullVb);
+        const f32 reference[4] = {0.5f, 0, 0, 0};
+        TransientAllocation r = d.AllocateTransient(sizeof(reference));
+        std::memcpy(r.data, reference, sizeof(reference));
+        cl.SetUniformBuffer(0, r);
+        cl.SetTexture(0, map, compare);
+        cl.Draw(4);
+        cl.EndRenderPass();
+        d.Submit(cl);
+        HX_REQUIRE(t.Read());
+        HX_CHECK_EQ(t.At(2, 8), 0xff00ff00u);
+        HX_CHECK_EQ(t.At(13, 8), 0xff0000ffu);
+
+        for (BufferHandle b : {leftVb, fullVb})
+            d.Destroy(b);
+        d.Destroy(map);
+        d.Destroy(scratch);
+        d.Destroy(compare);
+        for (PipelineHandle h : {casterPipe, receiverPipe})
+            d.Destroy(h);
+        for (ShaderHandle h : {casterVs, casterFs, receiverVs, receiverFs})
+            d.Destroy(h);
+    });
+}
+
 HX_TEST(RHI, DepthTest)
 {
     ForEachBackend([&](Device& d) {

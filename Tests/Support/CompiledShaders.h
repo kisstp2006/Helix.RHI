@@ -2481,4 +2481,185 @@ namespace helix::rhi::testing
         kSpinningFragmentDxbc, sizeof(kSpinningFragmentDxbc), nullptr, 0,
     };
 
+    inline const unsigned char kShadowReceiverVertexDxbc[] = {
+        68,88,66,67,22,176,243,231,180,87,34,87,226,223,184,8,183,36,180,80,1,0,0,0,128,2,0,0,3,0,0,0,
+        44,0,0,0,96,0,0,0,184,0,0,0,73,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,
+        0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,0,3,3,0,0,84,69,88,67,79,79,82,68,0,171,171,171,
+        79,83,71,78,80,0,0,0,2,0,0,0,8,0,0,0,56,0,0,0,0,0,0,0,1,0,0,0,3,0,0,0,
+        0,0,0,0,15,0,0,0,68,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,1,0,0,0,3,12,0,0,
+        83,86,95,80,111,115,105,116,105,111,110,0,84,69,88,67,79,79,82,68,0,171,171,171,83,72,68,82,192,1,0,0,
+        64,0,1,0,112,0,0,0,95,0,0,3,50,16,16,0,0,0,0,0,103,0,0,4,242,32,16,0,0,0,0,0,
+        1,0,0,0,101,0,0,3,50,32,16,0,1,0,0,0,104,0,0,2,8,0,0,0,54,0,0,5,50,0,16,0,
+        0,0,0,0,70,16,16,0,0,0,0,0,54,0,0,5,50,0,16,0,3,0,0,0,70,0,16,0,0,0,0,0,
+        54,0,0,8,66,0,16,0,3,0,0,0,2,64,0,0,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,63,
+        54,0,0,8,130,0,16,0,3,0,0,0,2,64,0,0,0,0,128,63,0,0,128,63,0,0,128,63,0,0,128,63,
+        54,0,0,5,242,0,16,0,1,0,0,0,70,14,16,0,3,0,0,0,56,0,0,10,18,0,16,0,3,0,0,0,
+        6,0,16,0,0,0,0,0,2,64,0,0,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,10,
+        18,0,16,0,4,0,0,0,6,0,16,0,3,0,0,0,2,64,0,0,0,0,0,63,0,0,0,63,0,0,0,63,
+        0,0,0,63,56,0,0,10,18,0,16,0,5,0,0,0,86,5,16,0,0,0,0,0,2,64,0,0,0,0,0,63,
+        0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,11,18,0,16,0,6,0,0,0,2,64,0,0,0,0,0,63,
+        0,0,0,63,0,0,0,63,0,0,0,63,6,0,16,128,65,0,0,0,5,0,0,0,54,0,0,5,18,0,16,0,
+        7,0,0,0,6,0,16,0,4,0,0,0,54,0,0,5,34,0,16,0,7,0,0,0,6,0,16,0,6,0,0,0,
+        54,0,0,5,50,0,16,0,2,0,0,0,70,0,16,0,7,0,0,0,54,0,0,5,242,32,16,0,0,0,0,0,
+        70,14,16,0,1,0,0,0,54,0,0,5,50,32,16,0,1,0,0,0,70,0,16,0,2,0,0,0,62,0,0,1,
+    };
+    inline const CompiledShader kShadowReceiverVertex = {
+        ShaderStage::Vertex,
+        "#version 330 core\n"
+        "struct S_UvVaryings_0\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec2 m_uv;\n"
+        "};\n"
+        "\n"
+        "S_UvVaryings_0 f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    S_UvVaryings_0 l0;\n"
+        "    l0.m_position = vec4(p_p, 0.5, 1.0);\n"
+        "    l0.m_uv = vec2(((p_p.x * 0.5) + 0.5), (0.5 - (p_p.y * 0.5)));\n"
+        "    return l0;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "out vec2 hx_v0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_UvVaryings_0 r = f_Vertex_0(hx_in0);\n"
+        "    gl_Position = r.m_position;\n"
+        "    hx_v0 = r.m_uv;\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "struct S_UvVaryings_0\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec2 m_uv;\n"
+        "};\n"
+        "\n"
+        "S_UvVaryings_0 f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    S_UvVaryings_0 l0;\n"
+        "    l0.m_position = vec4(p_p, 0.5, 1.0);\n"
+        "    l0.m_uv = vec2(((p_p.x * 0.5) + 0.5), (0.5 - (p_p.y * 0.5)));\n"
+        "    return l0;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "out vec2 hx_v0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_UvVaryings_0 r = f_Vertex_0(hx_in0);\n"
+        "    gl_Position = r.m_position;\n"
+        "    hx_v0 = r.m_uv;\n"
+        "}\n"
+        "",
+        kShadowReceiverVertexDxbc, sizeof(kShadowReceiverVertexDxbc), nullptr, 0,
+    };
+
+    inline const unsigned char kShadowReceiverFragmentDxbc[] = {
+        68,88,66,67,95,25,187,51,180,113,79,52,105,105,121,24,100,136,67,241,1,0,0,0,60,2,0,0,3,0,0,0,
+        44,0,0,0,132,0,0,0,184,0,0,0,73,83,71,78,80,0,0,0,2,0,0,0,8,0,0,0,56,0,0,0,
+        0,0,0,0,1,0,0,0,3,0,0,0,0,0,0,0,15,15,0,0,68,0,0,0,0,0,0,0,0,0,0,0,
+        3,0,0,0,1,0,0,0,3,3,0,0,83,86,95,80,111,115,105,116,105,111,110,0,84,69,88,67,79,79,82,68,
+        0,171,171,171,79,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,0,0,0,0,0,0,0,0,
+        3,0,0,0,0,0,0,0,15,0,0,0,83,86,95,84,97,114,103,101,116,0,171,171,83,72,68,82,124,1,0,0,
+        64,0,0,0,95,0,0,0,89,0,0,4,70,142,32,0,0,0,0,0,1,0,0,0,90,8,0,3,0,96,16,0,
+        0,0,0,0,88,24,0,4,0,112,16,0,0,0,0,0,85,85,0,0,100,32,0,4,242,16,16,0,0,0,0,0,
+        1,0,0,0,98,16,0,3,50,16,16,0,1,0,0,0,101,0,0,3,242,32,16,0,0,0,0,0,104,0,0,2,
+        5,0,0,0,54,0,0,5,242,0,16,0,0,0,0,0,70,30,16,0,0,0,0,0,54,0,0,5,50,0,16,0,
+        1,0,0,0,70,16,16,0,1,0,0,0,71,0,0,12,18,0,16,0,3,0,0,0,70,5,16,0,1,0,0,0,
+        70,126,16,0,0,0,0,0,0,96,16,0,0,0,0,0,10,128,32,0,0,0,0,0,0,0,0,0,54,0,0,5,
+        18,0,16,0,2,0,0,0,6,0,16,0,3,0,0,0,0,0,0,11,18,0,16,0,3,0,0,0,2,64,0,0,
+        0,0,128,63,0,0,128,63,0,0,128,63,0,0,128,63,6,0,16,128,65,0,0,0,2,0,0,0,54,0,0,5,
+        18,0,16,0,4,0,0,0,6,0,16,0,2,0,0,0,54,0,0,5,34,0,16,0,4,0,0,0,6,0,16,0,
+        3,0,0,0,54,0,0,8,66,0,16,0,4,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,54,0,0,8,130,0,16,0,4,0,0,0,2,64,0,0,0,0,128,63,0,0,128,63,0,0,128,63,
+        0,0,128,63,54,0,0,5,242,32,16,0,0,0,0,0,70,14,16,0,4,0,0,0,62,0,0,1,
+    };
+    inline const ShaderBinding kShadowReceiverFragmentBindings[] = {{"g_shadow", BindingKind::Texture, 0}, {"hx_block_receiver", BindingKind::UniformBuffer, 0}, };
+    inline const CompiledShader kShadowReceiverFragment = {
+        ShaderStage::Fragment,
+        "#version 330 core\n"
+        "struct S_UvVaryings_0\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec2 m_uv;\n"
+        "};\n"
+        "struct S_Receiver_1\n"
+        "{\n"
+        "    float m_reference;\n"
+        "    float m_pad0;\n"
+        "    float m_pad1;\n"
+        "    float m_pad2;\n"
+        "};\n"
+        "uniform sampler2DShadow g_shadow;\n"
+        "layout(std140) uniform hx_block_receiver\n"
+        "{\n"
+        "    S_Receiver_1 g_receiver;\n"
+        "};\n"
+        "\n"
+        "vec4 f_Fragment_0(in S_UvVaryings_0 p_input)\n"
+        "{\n"
+        "    float l0;\n"
+        "    l0 = textureLod(g_shadow, vec3(p_input.m_uv, g_receiver.m_reference), 0.0);\n"
+        "    return vec4(l0, (1.0 - l0), 0.0, 1.0);\n"
+        "}\n"
+        "\n"
+        "in vec2 hx_v0;\n"
+        "layout(location = 0) out vec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_UvVaryings_0 a0;\n"
+        "    a0.m_position = gl_FragCoord;\n"
+        "    a0.m_uv = hx_v0;\n"
+        "    hx_target0 = f_Fragment_0(a0);\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "struct S_UvVaryings_0\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec2 m_uv;\n"
+        "};\n"
+        "struct S_Receiver_1\n"
+        "{\n"
+        "    float m_reference;\n"
+        "    float m_pad0;\n"
+        "    float m_pad1;\n"
+        "    float m_pad2;\n"
+        "};\n"
+        "uniform highp sampler2DShadow g_shadow;\n"
+        "layout(std140) uniform hx_block_receiver\n"
+        "{\n"
+        "    S_Receiver_1 g_receiver;\n"
+        "};\n"
+        "\n"
+        "vec4 f_Fragment_0(in S_UvVaryings_0 p_input)\n"
+        "{\n"
+        "    float l0;\n"
+        "    l0 = textureLod(g_shadow, vec3(p_input.m_uv, g_receiver.m_reference), 0.0);\n"
+        "    return vec4(l0, (1.0 - l0), 0.0, 1.0);\n"
+        "}\n"
+        "\n"
+        "in vec2 hx_v0;\n"
+        "layout(location = 0) out vec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_UvVaryings_0 a0;\n"
+        "    a0.m_position = gl_FragCoord;\n"
+        "    a0.m_uv = hx_v0;\n"
+        "    hx_target0 = f_Fragment_0(a0);\n"
+        "}\n"
+        "",
+        kShadowReceiverFragmentDxbc, sizeof(kShadowReceiverFragmentDxbc), kShadowReceiverFragmentBindings, 2,
+    };
+
 }

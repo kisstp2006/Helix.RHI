@@ -695,7 +695,15 @@ namespace helix::rhi
                 t.desc = desc;
                 t.desc.initialData = nullptr;
                 bool depth = IsDepthFormat(desc.format);
-                UINT bind = (desc.usage & TextureSampled && !depth ? D3D11_BIND_SHADER_RESOURCE : 0) | (desc.usage & TextureRenderTarget ? D3D11_BIND_RENDER_TARGET : 0) |
+                // A depth texture that shaders also read is typeless; its depth view and its shader view give the formats.
+                bool sampledDepth = depth && (desc.usage & TextureSampled);
+                DXGI_FORMAT resourceFormat = ToDxgi(desc.format), viewFormat = resourceFormat;
+                if (sampledDepth)
+                {
+                    resourceFormat = desc.format == Format::D16Unorm ? DXGI_FORMAT_R16_TYPELESS : desc.format == Format::D32Float ? DXGI_FORMAT_R32_TYPELESS : DXGI_FORMAT_R24G8_TYPELESS;
+                    viewFormat = desc.format == Format::D16Unorm ? DXGI_FORMAT_R16_UNORM : desc.format == Format::D32Float ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+                }
+                UINT bind = (desc.usage & TextureSampled ? D3D11_BIND_SHADER_RESOURCE : 0) | (desc.usage & TextureRenderTarget ? D3D11_BIND_RENDER_TARGET : 0) |
                             (desc.usage & TextureDepthStencil ? D3D11_BIND_DEPTH_STENCIL : 0) | (desc.usage & TextureStorage ? D3D11_BIND_UNORDERED_ACCESS : 0);
                 // Initial data is one image per layer (per face of a cube, one block for a volume), each rows top first.
                 u32 bpp = FormatBytesPerPixel(desc.format);
@@ -705,7 +713,7 @@ namespace helix::rhi
                     init.Push({static_cast<const u8*>(desc.initialData) + usize(i) * desc.width * desc.height * bpp, desc.width * bpp, desc.width * desc.height * bpp});
                 if (desc.type == TextureType::Texture3D)
                 {
-                    D3D11_TEXTURE3D_DESC td{desc.width, desc.height, desc.depthOrLayers, desc.mipLevels, ToDxgi(desc.format), D3D11_USAGE_DEFAULT, bind, 0, 0};
+                    D3D11_TEXTURE3D_DESC td{desc.width, desc.height, desc.depthOrLayers, desc.mipLevels, resourceFormat, D3D11_USAGE_DEFAULT, bind, 0, 0};
                     ID3D11Texture3D* tex = nullptr;
                     if (Failed(device->CreateTexture3D(&td, desc.initialData && desc.mipLevels == 1 ? init.Data() : nullptr, &tex)))
                         return {};
@@ -719,7 +727,7 @@ namespace helix::rhi
                     td.Height = desc.height;
                     td.MipLevels = desc.mipLevels;
                     td.ArraySize = cube ? 6 : desc.depthOrLayers;
-                    td.Format = ToDxgi(desc.format);
+                    td.Format = resourceFormat;
                     td.SampleDesc = {desc.sampleCount, 0};
                     td.Usage = D3D11_USAGE_DEFAULT;
                     td.BindFlags = bind;
@@ -734,7 +742,7 @@ namespace helix::rhi
                 {
                     // The view follows the texture type, so a one layer array is still an array to the shader.
                     D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
-                    sd.Format = ToDxgi(desc.format);
+                    sd.Format = viewFormat;
                     if (desc.type == TextureType::Texture2DArray)
                     {
                         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
@@ -760,7 +768,21 @@ namespace helix::rhi
                 if (bind & D3D11_BIND_RENDER_TARGET)
                     device->CreateRenderTargetView(t.resource, nullptr, &t.rtv);
                 if (bind & D3D11_BIND_DEPTH_STENCIL)
-                    device->CreateDepthStencilView(t.resource, nullptr, &t.dsv);
+                {
+                    D3D11_DEPTH_STENCIL_VIEW_DESC dd{};
+                    dd.Format = ToDxgi(desc.format);
+                    if (desc.type == TextureType::Texture2D)
+                    {
+                        dd.ViewDimension = desc.sampleCount > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
+                        dd.Texture2D = {0};
+                    }
+                    else
+                    {
+                        dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+                        dd.Texture2DArray = {0, 0, layers};
+                    }
+                    device->CreateDepthStencilView(t.resource, &dd, &t.dsv);
+                }
                 return textures.Add(Move(t));
             }
 
