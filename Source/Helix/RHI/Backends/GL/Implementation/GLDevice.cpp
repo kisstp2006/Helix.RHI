@@ -17,6 +17,37 @@
 
 namespace helix::rhi
 {
+    namespace
+    {
+        // IEEE half from float, rounded to nearest even; infinities and NaN kept.
+        u16 FloatToHalf(f32 value)
+        {
+            u32 bits;
+            std::memcpy(&bits, &value, 4);
+            u32 sign = (bits >> 16) & 0x8000u, exponent = (bits >> 23) & 0xFFu, mantissa = bits & 0x7FFFFFu;
+            if (exponent == 0xFF)
+                return u16(sign | 0x7C00u | (mantissa ? 0x200u : 0));
+            i32 e = i32(exponent) - 127 + 15;
+            if (e >= 31)
+                return u16(sign | 0x7C00u);
+            if (e <= 0)
+            {
+                if (e < -10)
+                    return u16(sign);
+                mantissa |= 0x800000u;
+                u32 shift = u32(14 - e);
+                u32 half = mantissa >> shift, rest = mantissa & ((1u << shift) - 1), middle = 1u << (shift - 1);
+                if (rest > middle || (rest == middle && (half & 1)))
+                    half++;
+                return u16(sign | half);
+            }
+            u32 half = (u32(e) << 10) | (mantissa >> 13), rest = mantissa & 0x1FFFu;
+            if (rest > 0x1000u || (rest == 0x1000u && (half & 1)))
+                half++;
+            return u16(sign | half);
+        }
+    }
+
     using namespace helix::gl;
 
     namespace
@@ -1337,7 +1368,35 @@ namespace helix::rhi
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->id, GLint(mip));
                 glReadBuffer(GL_COLOR_ATTACHMENT0);
                 glPixelStorei(GL_PACK_ALIGNMENT, 1);
-                glReadPixels(0, 0, GLsizei(w), GLsizei(h), f.format, f.type, out);
+                // OpenGL ES reads one and two channel formats only as four channels: read those and keep the first ones.
+                u32 channels = f.format == GL_RED || f.format == GL_RED_INTEGER ? 1u : f.format == GL_RG || f.format == GL_RG_INTEGER ? 2u : 0u;
+                bool widen = caps.backend == Backend::OpenGLES && channels != 0 &&
+                             (f.type == GL_FLOAT || f.type == GL_UNSIGNED_INT || f.type == GL_INT || f.type == GL_UNSIGNED_BYTE);
+                if (widen)
+                {
+                    u32 component = bpp / channels;
+                    Array<u8> four;
+                    four.Resize(usize(w) * h * 4 * component);
+                    bool integer = f.format == GL_RED_INTEGER || f.format == GL_RG_INTEGER;
+                    glReadPixels(0, 0, GLsizei(w), GLsizei(h), integer ? GL_RGBA_INTEGER : GL_RGBA, f.type, four.Data());
+                    u8* bytes = static_cast<u8*>(out);
+                    for (usize p = 0; p < usize(w) * h; p++)
+                        std::memcpy(bytes + p * bpp, four.Data() + p * 4 * component, bpp);
+                }
+                else if (caps.backend == Backend::OpenGLES && f.type == GL_HALF_FLOAT)
+                {
+                    // Half floats are read as floats there, then rounded back.
+                    u32 count = bpp / 2;
+                    Array<f32> floats;
+                    floats.Resize(usize(w) * h * 4);
+                    glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_FLOAT, floats.Data());
+                    u16* halves = static_cast<u16*>(out);
+                    for (usize p = 0; p < usize(w) * h; p++)
+                        for (u32 c = 0; c < count; c++)
+                            halves[p * count + c] = FloatToHalf(floats[p * 4 + c]);
+                }
+                else
+                    glReadPixels(0, 0, GLsizei(w), GLsizei(h), f.format, f.type, out);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (!caps.clipControl)
                 {
@@ -1363,7 +1422,8 @@ namespace helix::rhi
                 Barrier();
                 glBindBuffer(GL_COPY_READ_BUFFER, b->id);
                 offset += b->heapOffset;
-                if (api.GetBufferSubData)
+                // OpenGL ES has no glGetBufferSubData, even where the driver of a desktop exports it.
+                if (api.GetBufferSubData && caps.backend != Backend::OpenGLES)
                 {
                     glGetBufferSubData(GL_COPY_READ_BUFFER, GLintptr(offset), GLsizeiptr(size), out);
                     return true;
