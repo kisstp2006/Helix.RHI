@@ -1,6 +1,7 @@
 #pragma once
 
 #include <helix/platform/window.h>
+#include <helix/rhi/bindless.h>
 #include <helix/rhi/command_list.h>
 
 // Put once in an executable to ask hybrid graphics laptops for the discrete GPU (also for OpenGL).
@@ -48,6 +49,10 @@ namespace helix::rhi
         virtual void Destroy(SamplerHandle handle) = 0;
         virtual void Destroy(ShaderHandle handle) = 0;
         virtual void Destroy(PipelineHandle handle) = 0;
+
+        // Returns a bindless index for a sampled texture and sampler, kInvalidBindlessIndex when unsupported.
+        virtual u32 RegisterBindless(TextureHandle texture, SamplerHandle sampler) = 0;
+        virtual void UnregisterBindless(u32 index) = 0;
 
         // Per-frame upload memory for uniform data; valid until the frame that allocated it has been executed by the GPU.
         virtual TransientAllocation AllocateTransient(u32 size) = 0;

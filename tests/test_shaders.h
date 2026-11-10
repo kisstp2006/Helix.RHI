@@ -67,6 +67,8 @@ namespace helix::rhi::testing
 
     inline String GlslSource(const DeviceCaps& caps, const char* body)
     {
+        if (StringView(body).StartsWith("#version"))
+            return String(body);
         bool es = caps.backend == Backend::OpenGLES || caps.backend == Backend::WebGL2;
         return helix::Format("{}{}", es ? "#version 300 es\nprecision highp float;\nprecision highp int;\n" : "#version 330 core\n", body);
     }

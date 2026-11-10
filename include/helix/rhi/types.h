@@ -114,6 +114,8 @@ namespace helix::rhi
         u32 mipLevels = 1;
         u32 sampleCount = 1;
         u32 usage = TextureSampled;
+        // Allocates the texture where the backend can address it by bindless index (a texture array pool on D3D11).
+        bool bindless = false;
         const void* initialData = nullptr;
         StringView debugName;
     };
@@ -361,6 +363,8 @@ namespace helix::rhi
         bool storageBuffers = false;
         bool multiDrawIndirect = false;
         bool bindlessTextures = false;
+        bool bindlessEmulated = false;
+        u32 maxBindlessTextures = 0;
         bool baseInstance = false;
         bool uniformBufferOffsets = false;
         bool persistentMapping = false;

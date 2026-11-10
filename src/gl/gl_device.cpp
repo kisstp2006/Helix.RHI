@@ -1,3 +1,4 @@
+#include "common/bindless_table.h"
 #include "common/pool.h"
 #include "gl/gl_context.h"
 
@@ -168,6 +169,10 @@ namespace helix::rhi
             u32 transientSize = 0, transientHead = 0, transientUploaded = 0;
             bool transientOrphan = true;
 
+            BindlessTable<GLuint64> bindless;
+            GLuint bindlessBuffer = 0;
+            u32 bindlessCapacity = 0;
+
             Pipeline* pipeline = nullptr;
             PipelineHandle appliedPipeline;
             struct VertexBinding
@@ -207,7 +212,9 @@ namespace helix::rhi
                 caps.compute = !web && (es ? at(3, 1) : at(4, 3));
                 caps.storageBuffers = caps.compute;
                 caps.multiDrawIndirect = !es && (at(4, 3) || HasExtension("GL_ARB_multi_draw_indirect"));
-                caps.bindlessTextures = HasExtension("GL_ARB_bindless_texture");
+                caps.bindlessTextures = HasExtension("GL_ARB_bindless_texture") && at(4, 3) && api.GetTextureSamplerHandleARB &&
+                                        api.MakeTextureHandleResidentARB;
+                caps.maxBindlessTextures = caps.bindlessTextures ? 1u << 20 : 0;
                 caps.baseInstance = !es && at(4, 2);
                 caps.uniformBufferOffsets = true;
                 caps.persistentMapping = !es && (at(4, 4) || HasExtension("GL_ARB_buffer_storage"));
@@ -256,6 +263,11 @@ namespace helix::rhi
                 pipelines.ForEach([](Pipeline& p) { glDeleteProgram(p.program); });
                 for (auto e : framebuffers)
                     glDeleteFramebuffers(1, &e.value);
+                for (u32 i = 0; i < bindless.Size(); i++)
+                    if (bindless.Data()[i])
+                        glMakeTextureHandleNonResidentARB(bindless.Data()[i]);
+                if (bindlessBuffer)
+                    glDeleteBuffers(1, &bindlessBuffer);
                 glDeleteFramebuffers(1, &readFramebuffer);
                 glDeleteVertexArrays(1, &vao);
                 DestroyGLContext(context);
@@ -464,6 +476,47 @@ namespace helix::rhi
                 appliedPipeline = {};
             }
 
+            u32 RegisterBindless(TextureHandle texture, SamplerHandle sampler) override
+            {
+                Texture* t = textures.Get(texture);
+                Sampler* s = samplers.Get(sampler);
+                if (!caps.bindlessTextures || !t || !s)
+                    return kInvalidBindlessIndex;
+                GLuint64 handle = glGetTextureSamplerHandleARB(t->id, s->id);
+                if (!handle)
+                    return kInvalidBindlessIndex;
+                glMakeTextureHandleResidentARB(handle);
+                return bindless.Add(handle);
+            }
+
+            void UnregisterBindless(u32 index) override
+            {
+                GLuint64 handle = 0;
+                if (bindless.Remove(index, handle) && handle)
+                    glMakeTextureHandleNonResidentARB(handle);
+            }
+
+            void UploadBindless()
+            {
+                if (!caps.bindlessTextures || bindless.Size() == 0)
+                    return;
+                if (!bindlessBuffer)
+                    glGenBuffers(1, &bindlessBuffer);
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, bindlessBuffer);
+                if (bindless.Dirty())
+                {
+                    u32 bytes = bindless.Size() * u32(sizeof(GLuint64));
+                    if (bytes > bindlessCapacity)
+                    {
+                        bindlessCapacity = Max(bytes * 2, 4096u);
+                        glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(bindlessCapacity), nullptr, GL_DYNAMIC_DRAW);
+                    }
+                    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, GLsizeiptr(bytes), bindless.Data());
+                    bindless.ClearDirty();
+                }
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kBindlessGLTableBinding, bindlessBuffer);
+            }
+
             TransientAllocation AllocateTransient(u32 size) override
             {
                 u32 aligned = u32(AlignUp(size, caps.uniformBufferAlignment));
@@ -613,6 +666,7 @@ namespace helix::rhi
             void Submit(const CommandList& commands) override
             {
                 UploadTransient();
+                UploadBindless();
                 glBindVertexArray(vao);
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)

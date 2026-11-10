@@ -522,3 +522,110 @@ HX_TEST(RHI, SwapChainPresent)
     }
 #endif
 }
+
+HX_TEST(RHI, BindlessTextures)
+{
+    const ShaderPair shaders = {
+        "cbuffer Draw : register(b0) { uint index; float x0; float x1; float pad; };"
+        "struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };"
+        "O main(float2 p : TEXCOORD0) { O o; o.p = float4(lerp(x0, x1, p.x) * 2 - 1, p.y * 2 - 1, 0.5, 1); o.uv = p; return o; }",
+        "cbuffer Draw : register(b0) { uint index; float x0; float x1; float pad; };"
+        "StructuredBuffer<uint> HelixBindless : register(t127);"
+        "Texture2DArray HelixPool0 : register(t96); Texture2DArray HelixPool1 : register(t97);"
+        "SamplerState HelixSampler0 : register(s8);"
+        "float4 SampleBindless(uint i, float2 uv) { uint e = HelixBindless[i]; float slice = float((e >> 5) & 2047);"
+        " [branch] switch (e & 31) { case 0: return HelixPool0.Sample(HelixSampler0, float3(uv, slice));"
+        " default: return HelixPool1.Sample(HelixSampler0, float3(uv, slice)); } }"
+        "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return SampleBindless(index, uv); }",
+        "#version 450 core\n"
+        "layout(std140, binding = 0) uniform Draw { uint index; float x0; float x1; float pad; };"
+        "layout(location = 0) in vec2 p; out vec2 uv;"
+        "void main() { gl_Position = vec4(mix(x0, x1, p.x) * 2.0 - 1.0, p.y * 2.0 - 1.0, 0.5, 1.0); uv = p; }",
+        "#version 450 core\n#extension GL_ARB_bindless_texture : require\n"
+        "layout(std430, binding = 7) readonly buffer HelixBindless { uvec2 helixHandles[]; };"
+        "layout(std140, binding = 0) uniform Draw { uint index; float x0; float x1; float pad; };"
+        "in vec2 uv; out vec4 o; void main() { o = texture(sampler2D(helixHandles[index]), uv); }",
+    };
+    ForEachBackend([&](Device& d) {
+        if (!d.Caps().bindlessTextures)
+        {
+            std::printf("    %s: no bindless textures, skipped\n", d.Caps().renderer);
+            return;
+        }
+        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
+        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders);
+        HX_REQUIRE(vs.IsValid() && fs.IsValid());
+        PipelineDesc pd;
+        pd.vertexShader = vs;
+        pd.fragmentShader = fs;
+        pd.vertexBuffers[0] = {8, StepMode::Vertex};
+        pd.vertexBufferCount = 1;
+        pd.attributes[0] = {0, 0, VertexFormat::Float2, 0};
+        pd.attributeCount = 1;
+        pd.topology = PrimitiveTopology::TriangleStrip;
+        PipelineHandle pipe = d.CreatePipeline(pd);
+        HX_REQUIRE(pipe.IsValid());
+        const f32 quad[] = {0, 0, 1, 0, 0, 1, 1, 1};
+        BufferHandle vb = d.CreateBuffer({.size = sizeof(quad), .usage = BufferVertex, .initialData = quad});
+        SamplerHandle sampler = d.CreateSampler({.minFilter = Filter::Nearest, .magFilter = Filter::Nearest, .mipFilter = Filter::Nearest});
+
+        auto solid = [&](u32 size, u32 color) {
+            Array<u32> texels;
+            texels.Resize(size * size, color);
+            return d.CreateTexture({.format = Format::RGBA8Unorm, .width = size, .height = size, .bindless = true, .initialData = texels.Data()});
+        };
+        TextureHandle red = solid(4, 0xff0000ff), green = solid(4, 0xff00ff00), blue = solid(8, 0xffff0000);
+        Array<TextureHandle> extra;
+        for (int i = 0; i < 40; i++)
+            extra.Push(solid(4, i == 39 ? 0xff00ffff : 0xff808080));
+        u32 iRed = d.RegisterBindless(red, sampler);
+        u32 iGreen = d.RegisterBindless(green, sampler);
+        u32 iBlue = d.RegisterBindless(blue, sampler);
+        u32 iYellow = d.RegisterBindless(extra.Back(), sampler);
+        HX_REQUIRE(iRed != kInvalidBindlessIndex && iGreen != kInvalidBindlessIndex && iBlue != kInvalidBindlessIndex && iYellow != kInvalidBindlessIndex);
+        d.UnregisterBindless(iGreen);
+        u32 reused = d.RegisterBindless(green, sampler);
+        HX_CHECK_EQ(reused, iGreen);
+
+        Target t(&d);
+        CommandList cl;
+        cl.BeginRenderPass(t.Pass());
+        cl.SetPipeline(pipe);
+        cl.SetVertexBuffer(0, vb);
+        const u32 order[4] = {iRed, reused, iBlue, iYellow};
+        for (u32 i = 0; i < 4; i++)
+        {
+            struct DrawData
+            {
+                u32 index;
+                f32 x0, x1, pad;
+            } data{order[i], f32(i) / 4.0f, f32(i + 1) / 4.0f, 0};
+            TransientAllocation a = d.AllocateTransient(sizeof(DrawData));
+            std::memcpy(a.data, &data, sizeof(data));
+            cl.SetUniformBuffer(0, a);
+            cl.Draw(4);
+        }
+        cl.EndRenderPass();
+        d.Submit(cl);
+        HX_REQUIRE(t.Read());
+        HX_CHECK_EQ(t.At(1, 8), 0xff0000ffu);
+        HX_CHECK_EQ(t.At(6, 8), 0xff00ff00u);
+        HX_CHECK_EQ(t.At(10, 8), 0xffff0000u);
+        HX_CHECK_EQ(t.At(14, 8), 0xff00ffffu);
+        std::printf("    bindless %s on %s, %u textures\n", d.Caps().bindlessEmulated ? "emulated with texture array pools" : "native",
+                    d.Caps().renderer, 43u);
+
+        for (u32 index : {iRed, reused, iBlue, iYellow})
+            d.UnregisterBindless(index);
+        for (TextureHandle h : extra)
+            d.Destroy(h);
+        d.Destroy(red);
+        d.Destroy(green);
+        d.Destroy(blue);
+        d.Destroy(sampler);
+        d.Destroy(vb);
+        d.Destroy(pipe);
+        d.Destroy(vs);
+        d.Destroy(fs);
+    });
+}

@@ -1,3 +1,4 @@
+#include "common/bindless_table.h"
 #include "common/pool.h"
 
 #include <helix/d3d11/d3d11.h>
@@ -95,6 +96,8 @@ namespace helix::rhi
 
         struct Texture
         {
+            i32 pool = -1;
+            u32 slice = 0;
             ID3D11Resource* resource = nullptr;
             ID3D11ShaderResourceView* srv = nullptr;
             ID3D11RenderTargetView* rtv = nullptr;
@@ -133,6 +136,15 @@ namespace helix::rhi
                 p->Release();
             p = nullptr;
         }
+
+        struct BindlessPool
+        {
+            ID3D11Texture2D* array = nullptr;
+            ID3D11ShaderResourceView* srv = nullptr;
+            DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+            u32 width = 0, height = 0, mips = 0, capacity = 0, next = 0;
+            Array<u32> freeSlices;
+        };
 
         IDXGIAdapter1* HardwareAdapter(u32 index)
         {
@@ -186,6 +198,14 @@ namespace helix::rhi
             u32 transientUploaded = 0;
             ID3D11Buffer* slotBuffers[kMaxUniformSlots] = {};
 
+            Array<BindlessPool> bindlessPools;
+            SamplerHandle bindlessSamplers[kBindlessD3D11MaxSamplers] = {};
+            u32 bindlessSamplerCount = 0;
+            BindlessTable<u32> bindless;
+            ID3D11Buffer* bindlessBuffer = nullptr;
+            ID3D11ShaderResourceView* bindlessSrv = nullptr;
+            u32 bindlessCapacity = 0;
+
             bool Init(const DeviceDesc& desc)
             {
                 if (!LoadLibraries())
@@ -224,6 +244,9 @@ namespace helix::rhi
                 if (Succeeded(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))))
                     caps.uniformBufferOffsets = context1 && options.ConstantBufferOffsetting && options.MapNoOverwriteOnDynamicConstantBuffer;
                 caps.uniformBufferAlignment = 256;
+                caps.bindlessTextures = level >= D3D_FEATURE_LEVEL_11_0;
+                caps.bindlessEmulated = true;
+                caps.maxBindlessTextures = caps.bindlessTextures ? kBindlessD3D11MaxPools * kBindlessD3D11MaxSlices : 0;
 
                 IDXGIDevice* dxgiDevice = nullptr;
                 IDXGIAdapter* adapter = nullptr;
@@ -318,6 +341,13 @@ namespace helix::rhi
                 pipelines.ForEach([this](Pipeline& p) { ReleasePipeline(p); });
                 for (auto& b : slotBuffers)
                     Release(b);
+                for (BindlessPool& p : bindlessPools)
+                {
+                    Release(p.srv);
+                    Release(p.array);
+                }
+                Release(bindlessSrv);
+                Release(bindlessBuffer);
                 Release(backBufferRtv);
                 Release(swapChain);
                 Release(context1);
@@ -366,8 +396,96 @@ namespace helix::rhi
                 return buffers.Add(Move(b));
             }
 
+            bool GrowPool(BindlessPool& p, u32 capacity)
+            {
+                D3D11_TEXTURE2D_DESC td{};
+                td.Width = p.width;
+                td.Height = p.height;
+                td.MipLevels = p.mips;
+                td.ArraySize = capacity;
+                td.Format = p.format;
+                td.SampleDesc = {1, 0};
+                td.Usage = D3D11_USAGE_DEFAULT;
+                td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                ID3D11Texture2D* array = nullptr;
+                if (Failed(device->CreateTexture2D(&td, nullptr, &array)))
+                    return false;
+                if (p.array)
+                {
+                    for (u32 slice = 0; slice < p.next; slice++)
+                        for (u32 mip = 0; mip < p.mips; mip++)
+                            context->CopySubresourceRegion(array, mip + slice * p.mips, 0, 0, 0, p.array, mip + slice * p.mips, nullptr);
+                }
+                ID3D11ShaderResourceView* srv = nullptr;
+                if (Failed(device->CreateShaderResourceView(array, nullptr, &srv)))
+                {
+                    Release(array);
+                    return false;
+                }
+                Release(p.srv);
+                Release(p.array);
+                p.array = array;
+                p.srv = srv;
+                p.capacity = capacity;
+                return true;
+            }
+
+            TextureHandle CreatePooledTexture(const TextureDesc& desc)
+            {
+                DXGI_FORMAT format = ToDxgi(desc.format);
+                i32 index = -1;
+                for (usize i = 0; i < bindlessPools.Size(); i++)
+                {
+                    const BindlessPool& p = bindlessPools[i];
+                    if (p.format == format && p.width == desc.width && p.height == desc.height && p.mips == desc.mipLevels)
+                        index = i32(i);
+                }
+                if (index < 0)
+                {
+                    if (bindlessPools.Size() == kBindlessD3D11MaxPools)
+                        return {};
+                    BindlessPool& p = bindlessPools.Emplace();
+                    p.format = format;
+                    p.width = desc.width;
+                    p.height = desc.height;
+                    p.mips = desc.mipLevels;
+                    index = i32(bindlessPools.Size() - 1);
+                }
+                BindlessPool& p = bindlessPools[usize(index)];
+                u32 slice;
+                if (!p.freeSlices.Empty())
+                {
+                    slice = p.freeSlices.Back();
+                    p.freeSlices.Pop();
+                }
+                else
+                {
+                    if (p.next == p.capacity)
+                    {
+                        u32 grown = Min(kBindlessD3D11MaxSlices, Max(16u, p.capacity * 2));
+                        if (grown == p.capacity || !GrowPool(p, grown))
+                            return {};
+                    }
+                    slice = p.next++;
+                }
+                if (desc.initialData)
+                {
+                    u32 pitch = desc.width * FormatBytesPerPixel(desc.format);
+                    context->UpdateSubresource(p.array, slice * p.mips, nullptr, desc.initialData, pitch, pitch * desc.height);
+                }
+                Texture t;
+                t.desc = desc;
+                t.desc.initialData = nullptr;
+                t.pool = index;
+                t.slice = slice;
+                return textures.Add(Move(t));
+            }
+
             TextureHandle CreateTexture(const TextureDesc& desc) override
             {
+                if (desc.bindless && caps.bindlessTextures && desc.type == TextureType::Texture2D && desc.sampleCount == 1 &&
+                    desc.usage == TextureSampled && !IsCompressedFormat(desc.format))
+                    return CreatePooledTexture(desc);
                 Texture t;
                 t.desc = desc;
                 t.desc.initialData = nullptr;
@@ -539,6 +657,8 @@ namespace helix::rhi
                 Texture t;
                 if (textures.Remove(h, t))
                 {
+                    if (t.pool >= 0)
+                        bindlessPools[usize(t.pool)].freeSlices.Push(t.slice);
                     Release(t.srv);
                     Release(t.rtv);
                     Release(t.dsv);
@@ -565,6 +685,68 @@ namespace helix::rhi
                 Pipeline p;
                 if (pipelines.Remove(h, p))
                     ReleasePipeline(p);
+            }
+
+            u32 RegisterBindless(TextureHandle texture, SamplerHandle sampler) override
+            {
+                Texture* t = textures.Get(texture);
+                if (!caps.bindlessTextures || !t || t->pool < 0 || !samplers.Get(sampler))
+                    return kInvalidBindlessIndex;
+                u32 slot = bindlessSamplerCount;
+                for (u32 i = 0; i < bindlessSamplerCount; i++)
+                    if (bindlessSamplers[i] == sampler)
+                        slot = i;
+                if (slot == bindlessSamplerCount)
+                {
+                    if (bindlessSamplerCount == kBindlessD3D11MaxSamplers)
+                        return kInvalidBindlessIndex;
+                    bindlessSamplers[bindlessSamplerCount++] = sampler;
+                }
+                return bindless.Add(PackD3D11BindlessEntry(u32(t->pool), t->slice, slot));
+            }
+
+            void UnregisterBindless(u32 index) override
+            {
+                u32 entry;
+                bindless.Remove(index, entry);
+            }
+
+            void UploadBindless()
+            {
+                if (bindless.Size() == 0)
+                    return;
+                if (bindless.Dirty())
+                {
+                    if (bindless.Size() > bindlessCapacity)
+                    {
+                        Release(bindlessSrv);
+                        Release(bindlessBuffer);
+                        bindlessCapacity = Max(bindless.Size() * 2, 1024u);
+                        D3D11_BUFFER_DESC bd{bindlessCapacity * 4, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
+                                             D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 4};
+                        if (Failed(device->CreateBuffer(&bd, nullptr, &bindlessBuffer)) ||
+                            Failed(device->CreateShaderResourceView(bindlessBuffer, nullptr, &bindlessSrv)))
+                            return;
+                    }
+                    D3D11_BOX box{0, 0, 0, bindless.Size() * 4, 1, 1};
+                    context->UpdateSubresource(bindlessBuffer, 0, &box, bindless.Data(), 0, 0);
+                    bindless.ClearDirty();
+                }
+                ID3D11ShaderResourceView* pools[kBindlessD3D11MaxPools] = {};
+                for (usize i = 0; i < bindlessPools.Size(); i++)
+                    pools[i] = bindlessPools[i].srv;
+                ID3D11SamplerState* states[kBindlessD3D11MaxSamplers] = {};
+                for (u32 i = 0; i < bindlessSamplerCount; i++)
+                    if (Sampler* sampler = samplers.Get(bindlessSamplers[i]))
+                        states[i] = sampler->state;
+                for (int stage = 0; stage < 2; stage++)
+                {
+                    auto setSrv = stage ? &ID3D11DeviceContext::PSSetShaderResources : &ID3D11DeviceContext::VSSetShaderResources;
+                    auto setSamplers = stage ? &ID3D11DeviceContext::PSSetSamplers : &ID3D11DeviceContext::VSSetSamplers;
+                    (context->*setSrv)(kBindlessD3D11TableRegister, 1, &bindlessSrv);
+                    (context->*setSrv)(kBindlessD3D11PoolRegister, kBindlessD3D11MaxPools, pools);
+                    (context->*setSamplers)(kBindlessD3D11SamplerRegister, kBindlessD3D11MaxSamplers, states);
+                }
             }
 
             TransientAllocation AllocateTransient(u32 size) override
@@ -664,6 +846,7 @@ namespace helix::rhi
             void Submit(const CommandList& commands) override
             {
                 UploadTransient();
+                UploadBindless();
                 Pipeline* pipeline = nullptr;
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)
