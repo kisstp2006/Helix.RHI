@@ -93,6 +93,7 @@ HX_TEST(Compute, WritesStorageTexture)
         HX_CHECK_EQ(pixels[15], 0xff0000ffu);
         HX_CHECK_EQ(pixels[15 * kSize], 0xff00ff00u);
         HX_CHECK_EQ(pixels[15 * kSize + 15], 0xff00ffffu);
+        HX_CHECK(MatchGolden("Compute.WritesStorageTexture", pixels, kSize, kSize));
 
         d.Destroy(tex);
         d.Destroy(pipe);
@@ -160,6 +161,7 @@ HX_TEST(Compute, GpuDrivenIndirectDraw)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("Compute.GpuDrivenIndirectDraw"));
         HX_CHECK_EQ(t.At(2, 8), 0xff00ff00u);
         HX_CHECK_EQ(t.At(6, 8), 0u);
         HX_CHECK_EQ(t.At(10, 8), 0xff00ff00u);

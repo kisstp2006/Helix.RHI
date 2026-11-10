@@ -102,6 +102,11 @@ quads, depth testing, swap chain presentation, bindless textures and buffers, co
 textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits and a 10000 draw benchmark. D3D11 tests compile
 their HLSL with the operating system compiler; it is never linked into the library.
 
+Rendered images are compared with PNG golden images in `Tests/Golden/` (Helix.Image codec, at most 2 per channel apart), so
+D3D11, GL, WARP and llvmpipe on every GPU must produce the same picture. After an intended change, regenerate them with
+`HELIX_UPDATE_GOLDEN=1`: the first backend that renders a test writes its file and the others are compared against it. A
+mismatch leaves `<name>.actual.png` in the temp directory.
+
 ## Build
 
 ```

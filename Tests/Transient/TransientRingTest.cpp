@@ -65,6 +65,7 @@ HX_TEST(Transient, RingWrapsAcrossSubmits)
                 d.Submit(cl);
             }
             HX_REQUIRE(t.Read());
+            HX_CHECK(t.Golden("Transient.RingWrapsAcrossSubmits"));
             u32 bad = 0;
             for (u32 i = 0; i < kSize * kSize; i++)
                 bad += NearColor(t.At(i % kSize, i / kSize), color(i)) ? 0 : 1;

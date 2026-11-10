@@ -102,6 +102,7 @@ HX_TEST(BindlessBuffers, ShadersReadByIndex)
         HX_CHECK_EQ(t.At(6, 8), 0xff00ff00u);
         HX_CHECK_EQ(t.At(10, 8), 0xffff0000u);
         HX_CHECK_EQ(t.At(14, 8), 0xff00ffffu);
+        HX_CHECK(t.Golden("BindlessBuffers.ShadersReadByIndex"));
 
         const f32 white[4] = {1, 1, 1, 1};
         CommandList update;

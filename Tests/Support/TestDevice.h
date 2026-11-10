@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Support/Golden.h>
 #include <Support/TestShaders.h>
 
 #include <Helix/Platform/Window/Window.h>
@@ -25,15 +26,17 @@ namespace helix::rhi::testing
     struct Target
     {
         Device* device;
+        u32 size;
         TextureHandle color;
         TextureHandle depth;
-        u32 pixels[kSize * kSize];
+        Array<u32> pixels;
 
-        explicit Target(Device* d, bool withDepth = false) : device(d)
+        explicit Target(Device* d, bool withDepth = false, u32 targetSize = kSize) : device(d), size(targetSize)
         {
-            color = d->CreateTexture({.format = Format::RGBA8Unorm, .width = kSize, .height = kSize, .usage = TextureRenderTarget | TextureSampled});
+            pixels.Resize(usize(size) * size);
+            color = d->CreateTexture({.format = Format::RGBA8Unorm, .width = size, .height = size, .usage = TextureRenderTarget | TextureSampled});
             if (withDepth)
-                depth = d->CreateTexture({.format = Format::D32Float, .width = kSize, .height = kSize, .usage = TextureDepthStencil});
+                depth = d->CreateTexture({.format = Format::D32Float, .width = size, .height = size, .usage = TextureDepthStencil});
         }
 
         ~Target()
@@ -54,8 +57,9 @@ namespace helix::rhi::testing
             return rp;
         }
 
-        bool Read() { return device->ReadTexture(color, 0, pixels, sizeof(pixels)); }
-        u32 At(u32 x, u32 y) const { return pixels[y * kSize + x]; }
+        bool Read() { return device->ReadTexture(color, 0, pixels.Data(), pixels.Size() * 4); }
+        u32 At(u32 x, u32 y) const { return pixels[y * size + x]; }
+        bool Golden(const char* name) const { return MatchGolden(name, pixels.Data(), size, size); }
     };
 
     // Float to UNORM8 conversion may round either way within the tolerance the APIs allow.

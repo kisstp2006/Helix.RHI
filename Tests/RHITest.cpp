@@ -41,6 +41,7 @@ HX_TEST(RHI, TriangleOrientationMatchesAcrossBackends)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.TriangleOrientationMatchesAcrossBackends"));
         HX_CHECK_EQ(t.At(1, 1), 0xff0000ffu);
         HX_CHECK_EQ(t.At(14, 14), 0x00000000u);
         HX_CHECK_EQ(t.At(14, 1), 0x00000000u);
@@ -95,6 +96,7 @@ HX_TEST(RHI, UniformsFromTransientMemory)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.UniformsFromTransientMemory"));
         HX_CHECK_EQ(t.At(2, 8), 0xff00ff00u);
         HX_CHECK_EQ(t.At(12, 8), 0xffff00ffu);
         d.Destroy(vb);
@@ -143,6 +145,7 @@ HX_TEST(RHI, TextureSamplingOrientation)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.TextureSamplingOrientation"));
         HX_CHECK_EQ(t.At(3, 3), 0xff0000ffu);
         HX_CHECK_EQ(t.At(12, 3), 0xff00ff00u);
         HX_CHECK_EQ(t.At(3, 12), 0xffff0000u);
@@ -203,6 +206,7 @@ HX_TEST(RHI, InstancedIndexedQuads)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.InstancedIndexedQuads"));
         HX_CHECK_EQ(t.At(3, 3), 0xff0000ffu);
         HX_CHECK_EQ(t.At(12, 3), 0xff00ff00u);
         HX_CHECK_EQ(t.At(3, 12), 0xffff0000u);
@@ -264,6 +268,7 @@ HX_TEST(RHI, DepthTest)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.DepthTest"));
         HX_CHECK_EQ(t.At(8, 8), 0xff0000ffu);
         d.Destroy(vb);
         d.Destroy(pipe);
@@ -492,6 +497,7 @@ HX_TEST(RHI, BindlessTextures)
         cl.EndRenderPass();
         d.Submit(cl);
         HX_REQUIRE(t.Read());
+        HX_CHECK(t.Golden("RHI.BindlessTextures"));
         HX_CHECK_EQ(t.At(1, 8), 0xff0000ffu);
         HX_CHECK_EQ(t.At(6, 8), 0xff00ff00u);
         HX_CHECK_EQ(t.At(10, 8), 0xffff0000u);
