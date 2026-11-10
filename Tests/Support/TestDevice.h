@@ -1,7 +1,7 @@
 #pragma once
 
+#include <Support/CompiledShader.h>
 #include <Support/Golden.h>
-#include <Support/TestShaders.h>
 
 #include <Helix/Platform/Window/Window.h>
 

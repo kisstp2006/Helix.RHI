@@ -34,6 +34,7 @@ endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     helix_add_executable(helix_rhi_triangle SOURCES Examples/Triangle/Triangle.cpp DEPS Helix::RHI)
+    target_include_directories(helix_rhi_triangle PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Tests")
     if(HELIX_PLATFORM STREQUAL "web")
         set_target_properties(helix_rhi_triangle PROPERTIES SUFFIX ".html")
         target_link_options(helix_rhi_triangle PRIVATE -sENVIRONMENT=web --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/Examples/Shared/WebShell.html")

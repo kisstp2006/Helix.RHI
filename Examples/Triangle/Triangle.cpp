@@ -1,3 +1,5 @@
+#include <Support/CompiledShaders.h>
+
 #include <Helix/Core/Logging/Log.h>
 #include <Helix/Platform/Time/Time.h>
 #include <Helix/Platform/Window/Window.h>
@@ -13,12 +15,6 @@ namespace
 {
     LogChannel DemoLog{"Triangle"};
 
-    const char* kVertex = "layout(location = 0) in vec2 p; layout(location = 1) in vec3 c; out vec3 vc;"
-                          "layout(std140) uniform Frame { vec4 rotation; };"
-                          "void main() { vec2 r = vec2(p.x * rotation.x - p.y * rotation.y, p.x * rotation.y + p.y * rotation.x);"
-                          " gl_Position = vec4(r * vec2(rotation.z, 1.0), 0.5, 1.0); vc = c; }";
-    const char* kFragment = "in vec3 vc; out vec4 o; void main() { o = vec4(vc, 1.0); }";
-
     struct App
     {
         platform::Window* window = nullptr;
@@ -30,12 +26,6 @@ namespace
         f64 autoClose = 0;
         u64 frames = 0;
     };
-
-    String Source(const DeviceCaps& caps, const char* body)
-    {
-        bool es = caps.backend != Backend::OpenGL;
-        return helix::Format("{}{}", es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n", body);
-    }
 
     bool Frame(void* user)
     {
@@ -96,10 +86,9 @@ int main(int argc, char** argv)
     }
     const DeviceCaps& caps = app.device->Caps();
     HX_LOG_INFO(DemoLog, "{}.{} on {}", caps.apiMajor, caps.apiMinor, caps.renderer);
-    const ShaderBinding bindings[] = {{"Frame", BindingKind::UniformBuffer, 0}};
-    String vs = Source(caps, kVertex), fs = Source(caps, kFragment);
-    ShaderHandle v = app.device->CreateShader({.stage = ShaderStage::Vertex, .source = vs, .bindings = bindings, .bindingCount = 1});
-    ShaderHandle f = app.device->CreateShader({.stage = ShaderStage::Fragment, .source = fs});
+    // The shaders come from the C# sources of the engine's shader compiler, as the tests' shaders do.
+    ShaderHandle v = rhi::testing::MakeShader(*app.device, rhi::testing::kSpinningVertex);
+    ShaderHandle f = rhi::testing::MakeShader(*app.device, rhi::testing::kSpinningFragment);
     PipelineDesc pd;
     pd.vertexShader = v;
     pd.fragmentShader = f;

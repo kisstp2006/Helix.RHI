@@ -96,7 +96,8 @@ device->Submit(cl);
 device->Present();
 ```
 
-`Examples/Triangle/Triangle.cpp` renders a rotating triangle with OpenGL, OpenGL ES or WebGL 2.
+`Examples/Triangle/Triangle.cpp` renders a rotating triangle with OpenGL, OpenGL ES or WebGL 2, with the same compiled shaders
+the tests use.
 
 ## Tests
 
@@ -104,10 +105,10 @@ The tests render offscreen on every available backend and check pixels: clear, t
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
 textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
-The shaders of the tests are in `Tests/Support/CompiledShaders.h`: GLSL, GLSL ES and Direct3D bytecode generated from C#
-sources by Helix.ShaderCompiler (its `export_rhi_shaders` target; the sources are in its `Tests/Shaders/Rhi`). This library
-sits below that compiler, so the generated file is checked in. Only the bindless texture and bindless buffer tests still
-carry hand written HLSL and GLSL, and compile the HLSL with the operating system compiler; it is never linked into the library.
+The shaders of the tests and the example are in `Tests/Support/CompiledShaders.h`: GLSL, GLSL ES and Direct3D bytecode
+generated from C# sources by Helix.ShaderCompiler (its `export_rhi_shaders` target; the sources are in its
+`Tests/Shaders/Rhi`). This library sits below that compiler, so the generated file is checked in. No shader is written
+by hand and no other shader compiler is used.
 
 Rendered images are compared with PNG golden images in `Tests/Golden/` (Helix.Image codec, at most 2 per channel apart), so
 D3D11, GL, WARP and llvmpipe on every GPU must produce the same picture. After an intended change, regenerate them with

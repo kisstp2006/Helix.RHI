@@ -390,35 +390,14 @@ HX_TEST(RHI, SwapChainPresent)
 
 HX_TEST(RHI, BindlessTextures)
 {
-    const ShaderPair shaders = {
-        "cbuffer Draw : register(b0) { uint index; float x0; float x1; float pad; };"
-        "struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };"
-        "O main(float2 p : TEXCOORD0) { O o; o.p = float4(lerp(x0, x1, p.x) * 2 - 1, p.y * 2 - 1, 0.5, 1); o.uv = p; return o; }",
-        "cbuffer Draw : register(b0) { uint index; float x0; float x1; float pad; };"
-        "ByteAddressBuffer HelixBindless : register(t127);"
-        "Texture2DArray HelixPool0 : register(t96); Texture2DArray HelixPool1 : register(t97);"
-        "SamplerState HelixSampler0 : register(s8);"
-        "float4 SampleBindless(uint i, float2 uv) { uint e = HelixBindless.Load(i * 4); float slice = float((e >> 5) & 2047);"
-        " [branch] switch (e & 31) { case 0: return HelixPool0.Sample(HelixSampler0, float3(uv, slice));"
-        " default: return HelixPool1.Sample(HelixSampler0, float3(uv, slice)); } }"
-        "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return SampleBindless(index, uv); }",
-        "#version 450 core\n"
-        "layout(std140, binding = 0) uniform Draw { uint index; float x0; float x1; float pad; };"
-        "layout(location = 0) in vec2 p; out vec2 uv;"
-        "void main() { gl_Position = vec4(mix(x0, x1, p.x) * 2.0 - 1.0, p.y * 2.0 - 1.0, 0.5, 1.0); uv = p; }",
-        "#version 450 core\n#extension GL_ARB_bindless_texture : require\n"
-        "layout(std430, binding = 7) readonly buffer HelixBindless { uvec2 helixHandles[]; };"
-        "layout(std140, binding = 0) uniform Draw { uint index; float x0; float x1; float pad; };"
-        "in vec2 uv; out vec4 o; void main() { o = texture(sampler2D(helixHandles[index]), uv); }",
-    };
     ForEachBackend([&](Device& d) {
         if (!d.Caps().bindlessTextures)
         {
             std::printf("    %s: no bindless textures, skipped\n", d.Caps().renderer);
             return;
         }
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders);
+        ShaderHandle vs = MakeShader(d, kBindlessQuadVertex);
+        ShaderHandle fs = MakeShader(d, kBindlessQuadFragment);
         HX_REQUIRE(vs.IsValid() && fs.IsValid());
         PipelineDesc pd;
         pd.vertexShader = vs;
