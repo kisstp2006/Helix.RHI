@@ -30,8 +30,8 @@ HX_TEST(BindlessBuffers, ShadersReadByIndex)
         "cbuffer D : register(b0) { uint index; float x0; float x1; float pad; };"
         "float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(lerp(x0, x1, p.x) * 2 - 1, p.y * 2 - 1, 0.5, 1); }",
         "cbuffer D : register(b0) { uint index; float x0; float x1; float pad; };"
-        "StructuredBuffer<uint2> HelixBufferTable : register(t125); ByteAddressBuffer HelixBufferHeap : register(t126);"
-        "float4 main() : SV_Target { return asfloat(HelixBufferHeap.Load4(HelixBufferTable[index].x + 16)); }",
+        "ByteAddressBuffer HelixBufferTable : register(t125); ByteAddressBuffer HelixBufferHeap : register(t126);"
+        "float4 main() : SV_Target { return asfloat(HelixBufferHeap.Load4(HelixBufferTable.Load(index * 8) + 16)); }",
         "#version 430 core\n"
         "layout(std140, binding = 0) uniform D { uint index; float x0; float x1; float pad; };"
         "layout(location = 0) in vec2 p; void main() { gl_Position = vec4(mix(x0, x1, p.x) * 2.0 - 1.0, p.y * 2.0 - 1.0, 0.5, 1.0); }",
@@ -127,8 +127,8 @@ HX_TEST(BindlessBuffers, ShadersReadByIndex)
 HX_TEST(BindlessBuffers, ComputeWritesThroughHeap)
 {
     const char* hlsl = "cbuffer P : register(b0) { uint index; uint3 pad; };"
-                       "StructuredBuffer<uint2> HelixBufferTable : register(t125); RWByteAddressBuffer HelixBufferHeap : register(u7);"
-                       "[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) { uint2 e = HelixBufferTable[index];"
+                       "ByteAddressBuffer HelixBufferTable : register(t125); RWByteAddressBuffer HelixBufferHeap : register(u7);"
+                       "[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) { uint2 e = HelixBufferTable.Load2(index * 8);"
                        " if (id.x * 4 >= e.y) return; HelixBufferHeap.Store(e.x + id.x * 4, id.x * 3 + index); }";
     const char* glsl = "layout(local_size_x = 64) in;"
                        "layout(std140, binding = 0) uniform P { uint index; };"

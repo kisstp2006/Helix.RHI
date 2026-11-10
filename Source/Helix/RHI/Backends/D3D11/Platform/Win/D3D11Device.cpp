@@ -539,9 +539,8 @@ namespace helix::rhi
                         Release(bufferTableBuffer);
                         bufferTableCapacity = Max(bufferTable.Size() * 2, 1024u);
                         D3D11_BUFFER_DESC bd{bufferTableCapacity * 8, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
-                                             D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 8};
-                        if (Failed(device->CreateBuffer(&bd, nullptr, &bufferTableBuffer)) ||
-                            Failed(device->CreateShaderResourceView(bufferTableBuffer, nullptr, &bufferTableSrv)))
+                                             D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+                        if (Failed(device->CreateBuffer(&bd, nullptr, &bufferTableBuffer)) || !(bufferTableSrv = RawSrv(bufferTableBuffer, 0, bufferTableCapacity * 8)))
                             return;
                     }
                     if (bufferTable.Size())
@@ -570,35 +569,32 @@ namespace helix::rhi
                 bd.CPUAccessFlags = desc.memory == MemoryType::Upload ? D3D11_CPU_ACCESS_WRITE : desc.memory == MemoryType::Readback ? D3D11_CPU_ACCESS_READ : 0;
                 if (desc.usage & BufferIndirect)
                     bd.MiscFlags |= D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
-                // Structured views cannot be combined with vertex, index or indirect use, those buffers get raw views.
-                bool structured = desc.structureStride && !(desc.usage & (BufferVertex | BufferIndex | BufferIndirect));
+                // Shaders see storage buffers as raw bytes. Raw views work on every buffer, also on vertex, index and
+                // indirect argument buffers, which cannot be structured; they need a size that is a multiple of four.
                 if (desc.usage & BufferStorage)
                 {
-                    bd.MiscFlags |= structured ? D3D11_RESOURCE_MISC_BUFFER_STRUCTURED : D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-                    bd.StructureByteStride = structured ? desc.structureStride : 0;
+                    bd.MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+                    bd.ByteWidth = UINT(AlignUp(bd.ByteWidth, 4));
                 }
                 D3D11_SUBRESOURCE_DATA init{desc.initialData, 0, 0};
+                // The buffer may be larger than the data given: the driver must not read past it.
+                Array<u8> padded;
+                if (desc.initialData && bd.ByteWidth > desc.size)
+                {
+                    padded.Resize(bd.ByteWidth);
+                    std::memset(padded.Data(), 0, padded.Size());
+                    std::memcpy(padded.Data(), desc.initialData, usize(desc.size));
+                    init.pSysMem = padded.Data();
+                }
                 Buffer b;
                 b.desc = desc;
                 b.desc.initialData = nullptr;
                 if (Failed(device->CreateBuffer(&bd, desc.initialData ? &init : nullptr, &b.buffer)))
                     return {};
                 if (bd.BindFlags & D3D11_BIND_SHADER_RESOURCE && desc.usage & BufferStorage)
-                {
-                    D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
-                    sd.Format = structured ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
-                    sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-                    sd.BufferEx = {0, UINT(structured ? desc.size / desc.structureStride : desc.size / 4), structured ? 0u : UINT(D3D11_BUFFEREX_SRV_FLAG_RAW)};
-                    device->CreateShaderResourceView(b.buffer, &sd, &b.srv);
-                }
+                    b.srv = RawSrv(b.buffer, 0, bd.ByteWidth);
                 if (bd.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
-                {
-                    D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
-                    ud.Format = structured ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
-                    ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-                    ud.Buffer = {0, UINT(structured ? desc.size / desc.structureStride : desc.size / 4), structured ? 0u : UINT(D3D11_BUFFER_UAV_FLAG_RAW)};
-                    device->CreateUnorderedAccessView(b.buffer, &ud, &b.uav);
-                }
+                    b.uav = RawUav(b.buffer, 0, bd.ByteWidth);
                 return buffers.Add(Move(b));
             }
 
@@ -944,9 +940,8 @@ namespace helix::rhi
                         Release(bindlessBuffer);
                         bindlessCapacity = Max(bindless.Size() * 2, 1024u);
                         D3D11_BUFFER_DESC bd{bindlessCapacity * 4, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
-                                             D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 4};
-                        if (Failed(device->CreateBuffer(&bd, nullptr, &bindlessBuffer)) ||
-                            Failed(device->CreateShaderResourceView(bindlessBuffer, nullptr, &bindlessSrv)))
+                                             D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+                        if (Failed(device->CreateBuffer(&bd, nullptr, &bindlessBuffer)) || !(bindlessSrv = RawSrv(bindlessBuffer, 0, bindlessCapacity * 4)))
                             return;
                     }
                     D3D11_BOX box{0, 0, 0, bindless.Size() * 4, 1, 1};

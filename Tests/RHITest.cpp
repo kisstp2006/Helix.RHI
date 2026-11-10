@@ -395,10 +395,10 @@ HX_TEST(RHI, BindlessTextures)
         "struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; };"
         "O main(float2 p : TEXCOORD0) { O o; o.p = float4(lerp(x0, x1, p.x) * 2 - 1, p.y * 2 - 1, 0.5, 1); o.uv = p; return o; }",
         "cbuffer Draw : register(b0) { uint index; float x0; float x1; float pad; };"
-        "StructuredBuffer<uint> HelixBindless : register(t127);"
+        "ByteAddressBuffer HelixBindless : register(t127);"
         "Texture2DArray HelixPool0 : register(t96); Texture2DArray HelixPool1 : register(t97);"
         "SamplerState HelixSampler0 : register(s8);"
-        "float4 SampleBindless(uint i, float2 uv) { uint e = HelixBindless[i]; float slice = float((e >> 5) & 2047);"
+        "float4 SampleBindless(uint i, float2 uv) { uint e = HelixBindless.Load(i * 4); float slice = float((e >> 5) & 2047);"
         " [branch] switch (e & 31) { case 0: return HelixPool0.Sample(HelixSampler0, float3(uv, slice));"
         " default: return HelixPool1.Sample(HelixSampler0, float3(uv, slice)); } }"
         "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return SampleBindless(index, uv); }",

@@ -25,8 +25,8 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - `SetStorageBuffer(slot, buffer, access)` binds a whole buffer, `SetStorageTexture(slot, texture, mip)` one mip level as an image.
   Slots 0 to 6 are shared by both; on D3D11 read-write resources use `u<slot>`, read-only buffers `t<16 + slot>`, on GL
   buffers use SSBO binding `slot` and textures image unit `slot`.
-- A storage buffer with `structureStride` is a structured buffer on D3D11; combined with vertex, index or indirect use it is a
-  raw (`ByteAddressBuffer`) buffer instead.
+- On D3D11 shaders see every storage buffer through a raw view (`ByteAddressBuffer`, `RWByteAddressBuffer`), so a buffer can
+  be storage and vertex, index or indirect argument buffer at once. The shader compiler of the engine generates this access.
 - `DrawIndirect`, `DrawIndexedIndirect` and `DispatchIndirect` read `DrawIndirectArgs`, `DrawIndexedIndirectArgs` and
   `DispatchIndirectArgs`, which have the same layout on every backend. Several draws use multi draw indirect where available.
 - Compute writes are visible to every later command: GL issues one memory barrier before the next command that may read them,
@@ -42,7 +42,7 @@ binding:
 
 | Backend | Table | Heap |
 |---|---|---|
-| D3D11 | `StructuredBuffer<uint2>` at `t125` | `ByteAddressBuffer` at `t126`, `RWByteAddressBuffer` at `u7` in compute |
+| D3D11 | `ByteAddressBuffer` at `t125`, 8 bytes per entry | `ByteAddressBuffer` at `t126`, `RWByteAddressBuffer` at `u7` in compute |
 | GL | SSBO binding 8, `uvec2[]` | SSBO binding 9, `uint[]` |
 
 In compute shaders on D3D11, read bindless buffers through the heap UAV rather than a read-only storage binding of the same

@@ -83,7 +83,6 @@ namespace helix::rhi
         u64 size = 0;
         u32 usage = 0;
         MemoryType memory = MemoryType::GpuOnly;
-        u32 structureStride = 0;
         // Suballocates from the bindless buffer heap (GPU only memory; vertex, index, storage and indirect use; raw views on D3D11).
         bool bindless = false;
         const void* initialData = nullptr;
