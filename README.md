@@ -13,6 +13,19 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - Offscreen images have the same memory layout on every backend (top row first): GL uses clip control with an upper left origin when available, `ReadTexture` returns rows top first everywhere.
 - Shaders: DXBC bytecode for D3D11, GLSL or ESSL source for GL with a name to slot binding table.
 
+## Layout
+
+| Path | Content |
+|---|---|
+| `Source/Helix/RHI/Descriptors/` | `Descriptors.h`: handles, formats and resource, pipeline and pass descriptions |
+| `Source/Helix/RHI/CommandList/` | `CommandList.h` |
+| `Source/Helix/RHI/Device/` | `Device.h`, device creation and backend selection |
+| `Source/Helix/RHI/Bindless/` | `Bindless.h`, descriptor table shared by both backends |
+| `Source/Helix/RHI/Resources/` | Handle pools |
+| `Source/Helix/RHI/Backends/D3D11/`, `Backends/GL/` | Backends, context creation in `Platform/<Os>/` |
+| `Tests/` | Device tests, `Tests/Support/` holds shaders and the discrete GPU entry point |
+| `Examples/Triangle/` | Rotating triangle |
+
 ## Backends
 
 | Backend | Platforms | Context |
@@ -38,7 +51,7 @@ device->Submit(cl);
 device->Present();
 ```
 
-`examples/triangle.cpp` renders a rotating triangle with OpenGL, OpenGL ES or WebGL 2.
+`Examples/Triangle/Triangle.cpp` renders a rotating triangle with OpenGL, OpenGL ES or WebGL 2.
 
 ## Tests
 
