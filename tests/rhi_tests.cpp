@@ -460,13 +460,26 @@ HX_TEST(RHI, SwapChainPresent)
 #if HX_PLATFORM_WINDOWS || HX_PLATFORM_LINUX
     if (!platform::Window::IsSupported())
         return;
-    for (Backend b : {Backend::D3D11, Backend::OpenGL})
+    struct Case
     {
+        Backend backend;
+        i32 adapter;
+    };
+    Array<Case> cases;
+    char name[128];
+    for (u32 i = 0; Device::AdapterName(Backend::D3D11, i, name, sizeof(name)); i++)
+        cases.Push({Backend::D3D11, i32(i)});
+    if (cases.Empty())
+        cases.Push({Backend::D3D11, -1});
+    cases.Push({Backend::OpenGL, -1});
+    for (const Case& c : cases)
+    {
+        Backend b = c.backend;
         if (!Device::IsBackendAvailable(b))
             continue;
         platform::Window* window = platform::Window::Create({.title = "rhi", .width = 128, .height = 96, .visible = false});
         HX_REQUIRE(window != nullptr);
-        Device* d = Device::Create({.backend = b, .window = window->GetNativeHandle(), .vsync = false});
+        Device* d = Device::Create({.backend = b, .window = window->GetNativeHandle(), .adapter = c.adapter, .vsync = false});
         if (!d)
         {
             platform::Window::Destroy(window);
@@ -498,6 +511,7 @@ HX_TEST(RHI, SwapChainPresent)
         }
         d->Resize(160, 120);
         d->WaitIdle();
+        std::printf("    presented on %s %s\n", BackendName(b), d->Caps().renderer);
         d->Destroy(vb);
         d->Destroy(pipe);
         d->Destroy(vs);
