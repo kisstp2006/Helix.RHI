@@ -114,7 +114,8 @@ mismatch leaves `<name>.actual.png` in the temp directory.
 ## Build
 
 ```
-git clone --recursive https://github.com/kisstp2006/Helix.RHI
+git clone https://github.com/kisstp2006/Helix.RHI
+git -C Helix.RHI submodule update --init
 cmake --preset windows-release
 cmake --build --preset windows-release
 ctest --preset windows-release
