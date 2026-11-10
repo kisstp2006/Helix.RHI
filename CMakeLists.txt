@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.28)
+project(Helix.RHI LANGUAGES CXX)
+
+if(NOT COMMAND helix_add_library)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/external/Helix.CMake/Helix.cmake")
+endif()
+
+helix_require(Core)
+helix_require(Platform)
+helix_require(GL)
+helix_require(D3D11)
+helix_add_library(helix_rhi ALIAS RHI PUBLIC_DEPS Helix::Core Helix::Platform Helix::GL PRIVATE_DEPS Helix::D3D11)
+if(HELIX_PLATFORM STREQUAL "windows")
+    target_link_libraries(helix_rhi PRIVATE user32 gdi32)
+endif()
+
+helix_add_test_suite(helix_rhi_tests DEPS Helix::RHI)
+
+if(PROJECT_IS_TOP_LEVEL)
+    helix_add_executable(helix_rhi_triangle SOURCES examples/triangle.cpp DEPS Helix::RHI)
+    if(HELIX_PLATFORM STREQUAL "web")
+        set_target_properties(helix_rhi_triangle PROPERTIES SUFFIX ".html")
+        target_link_options(helix_rhi_triangle PRIVATE -sENVIRONMENT=web --shell-file "${CMAKE_CURRENT_SOURCE_DIR}/examples/web_shell.html")
+    endif()
+endif()
