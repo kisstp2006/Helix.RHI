@@ -49,7 +49,8 @@ namespace helix::rhi
                 height = u32(r.bottom - r.top);
             }
 
-            bool IsES() const override { return false; }
+            bool IsES() const override { return es; }
+            bool es = false;
 
             bool Init(const DeviceDesc& desc)
             {
@@ -86,18 +87,36 @@ namespace helix::rhi
                 if (!legacy || !wgl::wglMakeCurrent(hdc, legacy))
                     return false;
                 wgl::Load(&gl::GetSystemProcAddress, nullptr);
+                // OpenGL ES needs the ES profile of the driver (WGL_EXT_create_context_es2_profile); without it there is none.
+                es = desc.backend == Backend::OpenGLES;
+                const char* extensions = wgl::api.GetExtensionsStringARB ? wgl::wglGetExtensionsStringARB(hdc) : nullptr;
+                bool esProfile = extensions && StringView(extensions).Contains("WGL_EXT_create_context_es2_profile");
+                if (es && (!esProfile || !wgl::api.CreateContextAttribsARB))
+                {
+                    wgl::wglMakeCurrent(nullptr, nullptr);
+                    wgl::wglDeleteContext(legacy);
+                    return false;
+                }
                 if (wgl::api.CreateContextAttribsARB)
                 {
                     const int versions[][2] = {{4, 6}, {4, 5}, {4, 3}, {3, 3}};
-                    for (auto& v : versions)
+                    const int esVersions[][2] = {{3, 2}, {3, 1}, {3, 0}};
+                    int profile = es ? int(wgl::WGL_CONTEXT_ES2_PROFILE_BIT_EXT) : int(wgl::WGL_CONTEXT_CORE_PROFILE_BIT_ARB);
+                    for (auto& v : es ? Span<const int[2]>(esVersions) : Span<const int[2]>(versions))
                     {
                         const int attribs[] = {int(wgl::WGL_CONTEXT_MAJOR_VERSION_ARB), v[0], int(wgl::WGL_CONTEXT_MINOR_VERSION_ARB), v[1],
-                                               int(wgl::WGL_CONTEXT_PROFILE_MASK_ARB), int(wgl::WGL_CONTEXT_CORE_PROFILE_BIT_ARB),
+                                               int(wgl::WGL_CONTEXT_PROFILE_MASK_ARB), profile,
                                                int(wgl::WGL_CONTEXT_FLAGS_ARB), desc.debug ? int(wgl::WGL_CONTEXT_DEBUG_BIT_ARB) : 0, 0};
                         context = wgl::wglCreateContextAttribsARB(hdc, nullptr, attribs);
                         if (context)
                             break;
                     }
+                }
+                if (es && !context)
+                {
+                    wgl::wglMakeCurrent(nullptr, nullptr);
+                    wgl::wglDeleteContext(legacy);
+                    return false;
                 }
                 if (context)
                 {
