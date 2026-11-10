@@ -1,5 +1,6 @@
 #include <Helix/RHI/Bindless/Implementation/BindlessTable.h>
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
+#include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
 
 #include <Helix/D3D11/D3D11.h>
 #include <Helix/RHI/Device/Device.h>
@@ -91,6 +92,7 @@ namespace helix::rhi
         {
             ID3D11Buffer* buffer = nullptr;
             ID3D11ShaderResourceView* srv = nullptr;
+            ID3D11UnorderedAccessView* uav = nullptr;
             BufferDesc desc{};
         };
 
@@ -102,6 +104,7 @@ namespace helix::rhi
             ID3D11ShaderResourceView* srv = nullptr;
             ID3D11RenderTargetView* rtv = nullptr;
             ID3D11DepthStencilView* dsv = nullptr;
+            ID3D11UnorderedAccessView* uavs[16] = {};
             TextureDesc desc{};
         };
 
@@ -121,6 +124,7 @@ namespace helix::rhi
         {
             ID3D11VertexShader* vs = nullptr;
             ID3D11PixelShader* ps = nullptr;
+            ID3D11ComputeShader* cs = nullptr;
             ID3D11InputLayout* layout = nullptr;
             ID3D11RasterizerState* raster = nullptr;
             ID3D11DepthStencilState* depth = nullptr;
@@ -144,6 +148,23 @@ namespace helix::rhi
             DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
             u32 width = 0, height = 0, mips = 0, capacity = 0, next = 0;
             Array<u32> freeSlices;
+        };
+
+        void ReleaseTexture(Texture& t)
+        {
+            for (auto& u : t.uavs)
+                Release(u);
+            Release(t.srv);
+            Release(t.rtv);
+            Release(t.dsv);
+            Release(t.resource);
+        }
+
+        struct UniformBinding
+        {
+            ID3D11Buffer* buffer = nullptr;
+            UINT first = 0, count = 0;
+            bool ranged = false;
         };
 
         IDXGIAdapter1* HardwareAdapter(u32 index)
@@ -206,6 +227,19 @@ namespace helix::rhi
             ID3D11ShaderResourceView* bindlessSrv = nullptr;
             u32 bindlessCapacity = 0;
 
+            // Compute state is applied at dispatch, read-only storage views before draws; UAVs are bound only around a dispatch.
+            ID3D11UnorderedAccessView* storageUavs[kMaxStorageSlots] = {};
+            ID3D11ShaderResourceView* storageSrvs[kMaxStorageSlots] = {};
+            bool storageSrvsDirty = false;
+            UniformBinding uniforms[kMaxUniformSlots];
+            ID3D11ShaderResourceView* textureSrvs[kMaxTextureSlots] = {};
+            ID3D11SamplerState* textureSamplers[kMaxTextureSlots] = {};
+            Pipeline* computePipeline = nullptr;
+
+            GpuTimerFrames timers;
+            Array<ID3D11Query*> timestampQueries[GpuTimerFrames::kFrames];
+            ID3D11Query* disjointQueries[GpuTimerFrames::kFrames] = {};
+
             bool Init(const DeviceDesc& desc)
             {
                 if (!LoadLibraries())
@@ -236,6 +270,8 @@ namespace helix::rhi
                 caps.apiMinor = level >= D3D_FEATURE_LEVEL_11_1 ? 1 : 0;
                 caps.compute = level >= D3D_FEATURE_LEVEL_11_0;
                 caps.storageBuffers = caps.compute;
+                caps.drawIndirect = caps.compute;
+                caps.gpuTimers = true;
                 caps.baseInstance = true;
                 caps.clipControl = true;
                 caps.textureCompressionBC = true;
@@ -264,7 +300,7 @@ namespace helix::rhi
                 D3D11_BUFFER_DESC bd{transientSize, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
                 if (Failed(device->CreateBuffer(&bd, nullptr, &transientBuffer)))
                     return false;
-                transient = buffers.Add(Buffer{transientBuffer, nullptr, BufferDesc{transientSize, BufferUniform, MemoryType::Upload}});
+                transient = buffers.Add(Buffer{transientBuffer, nullptr, nullptr, BufferDesc{transientSize, BufferUniform, MemoryType::Upload}});
                 if (!caps.uniformBufferOffsets)
                 {
                     for (auto& b : slotBuffers)
@@ -327,15 +363,17 @@ namespace helix::rhi
                 if (context)
                     context->ClearState();
                 buffers.ForEach([](Buffer& b) {
+                    Release(b.uav);
                     Release(b.srv);
                     Release(b.buffer);
                 });
-                textures.ForEach([](Texture& t) {
-                    Release(t.srv);
-                    Release(t.rtv);
-                    Release(t.dsv);
-                    Release(t.resource);
-                });
+                textures.ForEach([](Texture& t) { ReleaseTexture(t); });
+                for (u32 i = 0; i < GpuTimerFrames::kFrames; i++)
+                {
+                    for (ID3D11Query*& q : timestampQueries[i])
+                        Release(q);
+                    Release(disjointQueries[i]);
+                }
                 samplers.ForEach([](Sampler& s) { Release(s.state); });
                 shaders.ForEach([](Shader& s) { Release(s.object); });
                 pipelines.ForEach([this](Pipeline& p) { ReleasePipeline(p); });
@@ -364,6 +402,7 @@ namespace helix::rhi
                 Release(p.blend);
                 Release(p.vs);
                 Release(p.ps);
+                Release(p.cs);
             }
 
             const DeviceCaps& Caps() const override { return caps; }
@@ -382,10 +421,12 @@ namespace helix::rhi
                 bd.CPUAccessFlags = desc.memory == MemoryType::Upload ? D3D11_CPU_ACCESS_WRITE : desc.memory == MemoryType::Readback ? D3D11_CPU_ACCESS_READ : 0;
                 if (desc.usage & BufferIndirect)
                     bd.MiscFlags |= D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+                // Structured views cannot be combined with vertex, index or indirect use, those buffers get raw views.
+                bool structured = desc.structureStride && !(desc.usage & (BufferVertex | BufferIndex | BufferIndirect));
                 if (desc.usage & BufferStorage)
                 {
-                    bd.MiscFlags |= desc.structureStride ? D3D11_RESOURCE_MISC_BUFFER_STRUCTURED : D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-                    bd.StructureByteStride = desc.structureStride;
+                    bd.MiscFlags |= structured ? D3D11_RESOURCE_MISC_BUFFER_STRUCTURED : D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+                    bd.StructureByteStride = structured ? desc.structureStride : 0;
                 }
                 D3D11_SUBRESOURCE_DATA init{desc.initialData, 0, 0};
                 Buffer b;
@@ -393,6 +434,22 @@ namespace helix::rhi
                 b.desc.initialData = nullptr;
                 if (Failed(device->CreateBuffer(&bd, desc.initialData ? &init : nullptr, &b.buffer)))
                     return {};
+                if (bd.BindFlags & D3D11_BIND_SHADER_RESOURCE && desc.usage & BufferStorage)
+                {
+                    D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+                    sd.Format = structured ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
+                    sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+                    sd.BufferEx = {0, UINT(structured ? desc.size / desc.structureStride : desc.size / 4), structured ? 0u : UINT(D3D11_BUFFEREX_SRV_FLAG_RAW)};
+                    device->CreateShaderResourceView(b.buffer, &sd, &b.srv);
+                }
+                if (bd.BindFlags & D3D11_BIND_UNORDERED_ACCESS)
+                {
+                    D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+                    ud.Format = structured ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R32_TYPELESS;
+                    ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+                    ud.Buffer = {0, UINT(structured ? desc.size / desc.structureStride : desc.size / 4), structured ? 0u : UINT(D3D11_BUFFER_UAV_FLAG_RAW)};
+                    device->CreateUnorderedAccessView(b.buffer, &ud, &b.uav);
+                }
                 return buffers.Add(Move(b));
             }
 
@@ -642,11 +699,23 @@ namespace helix::rhi
                 return pipelines.Add(Move(p));
             }
 
+            PipelineHandle CreateComputePipeline(const ComputePipelineDesc& desc) override
+            {
+                Shader* cs = shaders.Get(desc.computeShader);
+                if (!cs || cs->stage != ShaderStage::Compute || !caps.compute)
+                    return {};
+                Pipeline p;
+                p.cs = static_cast<ID3D11ComputeShader*>(cs->object);
+                p.cs->AddRef();
+                return pipelines.Add(Move(p));
+            }
+
             void Destroy(BufferHandle h) override
             {
                 Buffer b;
                 if (buffers.Remove(h, b))
                 {
+                    Release(b.uav);
                     Release(b.srv);
                     Release(b.buffer);
                 }
@@ -659,10 +728,7 @@ namespace helix::rhi
                 {
                     if (t.pool >= 0)
                         bindlessPools[usize(t.pool)].freeSlices.Push(t.slice);
-                    Release(t.srv);
-                    Release(t.rtv);
-                    Release(t.dsv);
-                    Release(t.resource);
+                    ReleaseTexture(t);
                 }
             }
 
@@ -739,10 +805,16 @@ namespace helix::rhi
                 for (u32 i = 0; i < bindlessSamplerCount; i++)
                     if (Sampler* sampler = samplers.Get(bindlessSamplers[i]))
                         states[i] = sampler->state;
-                for (int stage = 0; stage < 2; stage++)
+                using SetSrv = void (ID3D11DeviceContext::*)(UINT, UINT, ID3D11ShaderResourceView* const*);
+                using SetSamplers = void (ID3D11DeviceContext::*)(UINT, UINT, ID3D11SamplerState* const*);
+                const SetSrv srvSetters[] = {&ID3D11DeviceContext::VSSetShaderResources, &ID3D11DeviceContext::PSSetShaderResources,
+                                             &ID3D11DeviceContext::CSSetShaderResources};
+                const SetSamplers samplerSetters[] = {&ID3D11DeviceContext::VSSetSamplers, &ID3D11DeviceContext::PSSetSamplers,
+                                                      &ID3D11DeviceContext::CSSetSamplers};
+                for (int stage = 0; stage < (caps.compute ? 3 : 2); stage++)
                 {
-                    auto setSrv = stage ? &ID3D11DeviceContext::PSSetShaderResources : &ID3D11DeviceContext::VSSetShaderResources;
-                    auto setSamplers = stage ? &ID3D11DeviceContext::PSSetSamplers : &ID3D11DeviceContext::VSSetSamplers;
+                    SetSrv setSrv = srvSetters[stage];
+                    SetSamplers setSamplers = samplerSetters[stage];
                     (context->*setSrv)(kBindlessD3D11TableRegister, 1, &bindlessSrv);
                     (context->*setSrv)(kBindlessD3D11PoolRegister, kBindlessD3D11MaxPools, pools);
                     (context->*setSamplers)(kBindlessD3D11SamplerRegister, kBindlessD3D11MaxSamplers, states);
@@ -783,7 +855,122 @@ namespace helix::rhi
             }
 
             void BeginFrame() override {}
-            void EndFrame() override {}
+
+            void EndFrame() override
+            {
+                if (timers.Close())
+                    context->End(disjointQueries[timers.CurrentIndex()]);
+                PollTimers();
+                timers.Advance();
+            }
+
+            void PollTimers()
+            {
+                timers.ForEachPending([&](u32 index, GpuTimerFrames::Frame& f) {
+                    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+                    if (context->GetData(disjointQueries[index], &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+                        return false;
+                    Array<u64> ticks;
+                    ticks.Resize(f.queries);
+                    for (u32 q = 0; q < f.queries; q++)
+                        if (context->GetData(timestampQueries[index][q], &ticks[q], sizeof(u64), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+                            return false;
+                    timers.Resolve(f, ticks.Data(), dj.Frequency, !dj.Disjoint);
+                    return true;
+                });
+            }
+
+            u32 ReadGpuTimings(GpuTiming* out, u32 max) override
+            {
+                PollTimers();
+                return timers.Read(out, max);
+            }
+
+            void WriteTimestamp(i32 index)
+            {
+                if (index < 0)
+                    return;
+                u32 frame = timers.CurrentIndex();
+                Array<ID3D11Query*>& queries = timestampQueries[frame];
+                D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP, 0};
+                while (queries.Size() <= usize(index))
+                {
+                    ID3D11Query* q = nullptr;
+                    device->CreateQuery(&qd, &q);
+                    queries.Push(q);
+                }
+                if (index == 0)
+                {
+                    if (!disjointQueries[frame])
+                    {
+                        D3D11_QUERY_DESC dd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+                        device->CreateQuery(&dd, &disjointQueries[frame]);
+                    }
+                    context->Begin(disjointQueries[frame]);
+                }
+                context->End(queries[usize(index)]);
+            }
+
+            void ApplyStorageViews()
+            {
+                if (!storageSrvsDirty)
+                    return;
+                context->VSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
+                context->PSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
+                storageSrvsDirty = false;
+            }
+
+            // Binds the compute view of the current state, runs the dispatch and unbinds the UAVs again so later passes can read the results.
+            template <typename F>
+            void RunCompute(F&& dispatch)
+            {
+                if (!computePipeline)
+                    return;
+                ID3D11Buffer* cbs[kMaxUniformSlots] = {};
+                for (u32 i = 0; i < kMaxUniformSlots; i++)
+                    cbs[i] = uniforms[i].buffer;
+                context->CSSetConstantBuffers(0, kMaxUniformSlots, cbs);
+                if (context1)
+                    for (u32 i = 0; i < kMaxUniformSlots; i++)
+                        if (uniforms[i].ranged)
+                            context1->CSSetConstantBuffers1(i, 1, &uniforms[i].buffer, &uniforms[i].first, &uniforms[i].count);
+                context->CSSetShaderResources(0, kMaxTextureSlots, textureSrvs);
+                context->CSSetSamplers(0, kMaxTextureSlots, textureSamplers);
+                context->CSSetShaderResources(kStorageD3D11ReadOnlyRegister, kMaxStorageSlots, storageSrvs);
+                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots, storageUavs, nullptr);
+                dispatch();
+                ID3D11UnorderedAccessView* none[kMaxStorageSlots] = {};
+                context->CSSetUnorderedAccessViews(0, kMaxStorageSlots, none, nullptr);
+                storageSrvsDirty = true;
+            }
+
+            ID3D11UnorderedAccessView* TextureUav(Texture& t, u32 mip)
+            {
+                if (mip >= 16 || !(t.desc.usage & TextureStorage) || !t.resource)
+                    return nullptr;
+                if (!t.uavs[mip])
+                {
+                    D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+                    ud.Format = ToDxgi(t.desc.format);
+                    if (t.desc.type == TextureType::Texture3D)
+                    {
+                        ud.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+                        ud.Texture3D = {mip, 0, ~0u};
+                    }
+                    else if (t.desc.type == TextureType::Texture2D && t.desc.depthOrLayers == 1)
+                    {
+                        ud.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+                        ud.Texture2D = {mip};
+                    }
+                    else
+                    {
+                        ud.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+                        ud.Texture2DArray = {mip, 0, t.desc.type == TextureType::TextureCube ? 6u : t.desc.depthOrLayers};
+                    }
+                    device->CreateUnorderedAccessView(t.resource, &ud, &t.uavs[mip]);
+                }
+                return t.uavs[mip];
+            }
 
             void Present() override
             {
@@ -830,6 +1017,7 @@ namespace helix::rhi
                     }
                     context->VSSetConstantBuffers(slot, 1, &slotBuffers[slot]);
                     context->PSSetConstantBuffers(slot, 1, &slotBuffers[slot]);
+                    uniforms[slot] = {slotBuffers[slot], 0, 0, false};
                     return;
                 }
                 if (context1 && (offset || caps.uniformBufferOffsets))
@@ -837,10 +1025,12 @@ namespace helix::rhi
                     UINT first = offset / 16, count = UINT(AlignUp(size, 256) / 16);
                     context1->VSSetConstantBuffers1(slot, 1, &b->buffer, &first, &count);
                     context1->PSSetConstantBuffers1(slot, 1, &b->buffer, &first, &count);
+                    uniforms[slot] = {b->buffer, first, count, true};
                     return;
                 }
                 context->VSSetConstantBuffers(slot, 1, &b->buffer);
                 context->PSSetConstantBuffers(slot, 1, &b->buffer);
+                uniforms[slot] = {b->buffer, 0, 0, false};
             }
 
             void Submit(const CommandList& commands) override
@@ -903,7 +1093,14 @@ namespace helix::rhi
                     }
                     case CommandType::SetPipeline:
                     {
-                        pipeline = pipelines.Get(CommandData<CmdSetPipeline>(data).pipeline);
+                        Pipeline* p = pipelines.Get(CommandData<CmdSetPipeline>(data).pipeline);
+                        if (p && p->cs)
+                        {
+                            computePipeline = p;
+                            context->CSSetShader(p->cs, nullptr, 0);
+                            break;
+                        }
+                        pipeline = p;
                         if (!pipeline)
                             break;
                         context->IASetInputLayout(pipeline->layout);
@@ -948,10 +1145,13 @@ namespace helix::rhi
                         context->PSSetSamplers(c.slot, 1, &state);
                         context->VSSetShaderResources(c.slot, 1, &srv);
                         context->VSSetSamplers(c.slot, 1, &state);
+                        textureSrvs[c.slot] = srv;
+                        textureSamplers[c.slot] = state;
                         break;
                     }
                     case CommandType::Draw:
                     {
+                        ApplyStorageViews();
                         const CmdDraw& c = CommandData<CmdDraw>(data);
                         if (c.instanceCount == 1 && c.firstInstance == 0)
                             context->Draw(c.vertexCount, c.firstVertex);
@@ -961,6 +1161,7 @@ namespace helix::rhi
                     }
                     case CommandType::DrawIndexed:
                     {
+                        ApplyStorageViews();
                         const CmdDrawIndexed& c = CommandData<CmdDrawIndexed>(data);
                         if (c.instanceCount == 1 && c.firstInstance == 0)
                             context->DrawIndexed(c.indexCount, c.firstIndex, c.baseVertex);
@@ -1005,6 +1206,66 @@ namespace helix::rhi
                         break;
                     }
                     case CommandType::CopyTextureToBuffer:
+                        break;
+                    case CommandType::SetStorageBuffer:
+                    {
+                        const CmdSetStorageBuffer& c = CommandData<CmdSetStorageBuffer>(data);
+                        if (c.slot >= kMaxStorageSlots)
+                            break;
+                        Buffer* b = buffers.Get(c.buffer);
+                        bool write = c.access == StorageAccess::ReadWrite;
+                        storageUavs[c.slot] = write && b ? b->uav : nullptr;
+                        storageSrvs[c.slot] = !write && b ? b->srv : nullptr;
+                        storageSrvsDirty = true;
+                        break;
+                    }
+                    case CommandType::SetStorageTexture:
+                    {
+                        const CmdSetStorageTexture& c = CommandData<CmdSetStorageTexture>(data);
+                        Texture* t = textures.Get(c.texture);
+                        if (c.slot < kMaxStorageSlots)
+                            storageUavs[c.slot] = t ? TextureUav(*t, c.mipLevel) : nullptr;
+                        break;
+                    }
+                    case CommandType::Dispatch:
+                    {
+                        const CmdDispatch& c = CommandData<CmdDispatch>(data);
+                        RunCompute([&] { context->Dispatch(c.x, c.y, c.z); });
+                        break;
+                    }
+                    case CommandType::DispatchIndirect:
+                    {
+                        const CmdIndirect& c = CommandData<CmdIndirect>(data);
+                        if (Buffer* b = buffers.Get(c.buffer))
+                            RunCompute([&] { context->DispatchIndirect(b->buffer, c.offset); });
+                        break;
+                    }
+                    case CommandType::DrawIndirect:
+                    case CommandType::DrawIndexedIndirect:
+                    {
+                        const CmdIndirect& c = CommandData<CmdIndirect>(data);
+                        Buffer* b = buffers.Get(c.buffer);
+                        if (!b)
+                            break;
+                        ApplyStorageViews();
+                        for (u32 i = 0; i < c.drawCount; i++)
+                        {
+                            if (type == CommandType::DrawIndirect)
+                                context->DrawInstancedIndirect(b->buffer, c.offset + i * c.stride);
+                            else
+                                context->DrawIndexedInstancedIndirect(b->buffer, c.offset + i * c.stride);
+                        }
+                        break;
+                    }
+                    case CommandType::BeginGpuScope:
+                    {
+                        const char* name;
+                        std::memcpy(&name, data, sizeof(name));
+                        WriteTimestamp(timers.Begin(name));
+                        break;
+                    }
+                    case CommandType::EndGpuScope:
+                        WriteTimestamp(timers.End());
                         break;
                     }
                 });

@@ -44,6 +44,7 @@ namespace helix::rhi
         virtual SamplerHandle CreateSampler(const SamplerDesc& desc) = 0;
         virtual ShaderHandle CreateShader(const ShaderDesc& desc) = 0;
         virtual PipelineHandle CreatePipeline(const PipelineDesc& desc) = 0;
+        virtual PipelineHandle CreateComputePipeline(const ComputePipelineDesc& desc) = 0;
         virtual void Destroy(BufferHandle handle) = 0;
         virtual void Destroy(TextureHandle handle) = 0;
         virtual void Destroy(SamplerHandle handle) = 0;
@@ -56,6 +57,10 @@ namespace helix::rhi
 
         // Per-frame upload memory for uniform data; valid until the frame that allocated it has been executed by the GPU.
         virtual TransientAllocation AllocateTransient(u32 size) = 0;
+
+        // Scopes of the newest frame whose timestamps are ready (frames end at EndFrame); returns the count written.
+        // While a profiler capture runs the scopes are also recorded on the profiler track "GPU".
+        virtual u32 ReadGpuTimings(GpuTiming* out, u32 max) = 0;
 
         virtual void BeginFrame() = 0;
         virtual void Submit(const CommandList& commands) = 0;

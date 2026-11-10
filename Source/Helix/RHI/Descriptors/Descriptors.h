@@ -174,6 +174,7 @@ namespace helix::rhi
         UniformBuffer,
         Texture,
         StorageBuffer,
+        StorageTexture,
     };
 
     // Ties a name used by GLSL to the slot the commands bind; D3D11 uses the registers compiled into the bytecode.
@@ -281,6 +282,16 @@ namespace helix::rhi
     inline constexpr u32 kMaxVertexAttributes = 16;
     inline constexpr u32 kMaxUniformSlots = 12;
     inline constexpr u32 kMaxTextureSlots = 16;
+    // Storage buffers and storage textures share slots 0 to 6; GL binding 7 holds the bindless table.
+    // D3D11: read-write resources use register u<slot>, read-only storage buffers t<kStorageD3D11ReadOnlyRegister + slot>.
+    inline constexpr u32 kMaxStorageSlots = 7;
+    inline constexpr u32 kStorageD3D11ReadOnlyRegister = 16;
+
+    enum class StorageAccess : u8
+    {
+        ReadOnly,
+        ReadWrite,
+    };
 
     struct PipelineDesc
     {
@@ -303,6 +314,39 @@ namespace helix::rhi
         Format depthFormat = Format::Unknown;
         u32 sampleCount = 1;
         StringView debugName;
+    };
+
+    struct ComputePipelineDesc
+    {
+        ShaderHandle computeShader;
+        StringView debugName;
+    };
+
+    // Argument layouts of indirect commands, identical on every backend.
+    struct DrawIndirectArgs
+    {
+        u32 vertexCount, instanceCount, firstVertex, firstInstance;
+    };
+
+    struct DrawIndexedIndirectArgs
+    {
+        u32 indexCount, instanceCount, firstIndex;
+        i32 baseVertex;
+        u32 firstInstance;
+    };
+
+    struct DispatchIndirectArgs
+    {
+        u32 x, y, z;
+    };
+
+    // A GPU scope of the most recently resolved frame; times are relative to the first scope of that frame.
+    struct GpuTiming
+    {
+        const char* name = nullptr;
+        u32 depth = 0;
+        f64 beginMs = 0;
+        f64 durationMs = 0;
     };
 
     enum class LoadOp : u8
@@ -361,7 +405,9 @@ namespace helix::rhi
         u32 apiMinor = 0;
         bool compute = false;
         bool storageBuffers = false;
+        bool drawIndirect = false;
         bool multiDrawIndirect = false;
+        bool gpuTimers = false;
         bool bindlessTextures = false;
         bool bindlessEmulated = false;
         u32 maxBindlessTextures = 0;

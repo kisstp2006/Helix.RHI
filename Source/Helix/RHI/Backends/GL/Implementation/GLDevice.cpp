@@ -1,6 +1,7 @@
 #include <Helix/RHI/Bindless/Implementation/BindlessTable.h>
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
 #include <Helix/RHI/Backends/GL/Implementation/GLContext.h>
+#include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
 
 #include <Helix/Core/Containers/HashMap.h>
 #include <Helix/Core/Logging/Log.h>
@@ -145,6 +146,7 @@ namespace helix::rhi
         struct Pipeline
         {
             GLuint program = 0;
+            bool compute = false;
             PipelineDesc desc{};
         };
 
@@ -187,6 +189,13 @@ namespace helix::rhi
             bool offscreen = false;
             u32 targetHeight = 0;
             bool frontCounterClockwise = false;
+            GLuint currentProgram = 0;
+            Pipeline* computePipeline = nullptr;
+            bool barrierPending = false;
+
+            GpuTimerFrames timers;
+            Array<GLuint> timestampQueries[GpuTimerFrames::kFrames];
+            bool timerExt = false;
 
             bool Init(const DeviceDesc& desc)
             {
@@ -211,6 +220,9 @@ namespace helix::rhi
                 bool web = caps.backend == Backend::WebGL2;
                 caps.compute = !web && (es ? at(3, 1) : at(4, 3));
                 caps.storageBuffers = caps.compute;
+                caps.drawIndirect = !web && (es ? at(3, 1) : at(4, 0)) && api.DrawArraysIndirect && api.DrawElementsIndirect;
+                timerExt = es && HasExtension("GL_EXT_disjoint_timer_query") && api.QueryCounterEXT && api.GetQueryObjectui64vEXT;
+                caps.gpuTimers = !web && (es ? timerExt : api.QueryCounter && api.GetQueryObjectui64v && api.GetQueryObjectuiv);
                 caps.multiDrawIndirect = !es && (at(4, 3) || HasExtension("GL_ARB_multi_draw_indirect"));
                 caps.bindlessTextures = HasExtension("GL_ARB_bindless_texture") && at(4, 3) && api.GetTextureSamplerHandleARB &&
                                         api.MakeTextureHandleResidentARB;
@@ -261,6 +273,9 @@ namespace helix::rhi
                 samplers.ForEach([](Sampler& s) { glDeleteSamplers(1, &s.id); });
                 shaders.ForEach([](Shader& s) { glDeleteShader(s.id); });
                 pipelines.ForEach([](Pipeline& p) { glDeleteProgram(p.program); });
+                for (Array<GLuint>& queries : timestampQueries)
+                    if (!queries.Empty())
+                        glDeleteQueries(GLsizei(queries.Size()), queries.Data());
                 for (auto e : framebuffers)
                     glDeleteFramebuffers(1, &e.value);
                 for (u32 i = 0; i < bindless.Size(); i++)
@@ -402,32 +417,63 @@ namespace helix::rhi
                     return {};
                 }
                 glUseProgram(p.program);
-                for (Shader* s : {vs, fs})
-                {
-                    for (const BindingName& b : s->bindings)
-                    {
-                        if (b.kind == BindingKind::UniformBuffer)
-                        {
-                            GLuint index = glGetUniformBlockIndex(p.program, b.name.CStr());
-                            if (index != GL_INVALID_INDEX)
-                                glUniformBlockBinding(p.program, index, b.slot);
-                        }
-                        else if (b.kind == BindingKind::Texture)
-                        {
-                            GLint location = glGetUniformLocation(p.program, b.name.CStr());
-                            if (location >= 0)
-                                glUniform1i(location, GLint(b.slot));
-                        }
-                        else if (api.ShaderStorageBlockBinding)
-                        {
-                            GLuint index = glGetProgramResourceIndex(p.program, GL_SHADER_STORAGE_BLOCK, b.name.CStr());
-                            if (index != GL_INVALID_INDEX)
-                                glShaderStorageBlockBinding(p.program, index, b.slot);
-                        }
-                    }
-                }
+                currentProgram = p.program;
+                ApplyBindings(p.program, *vs);
+                ApplyBindings(p.program, *fs);
                 appliedPipeline = {};
                 return pipelines.Add(Move(p));
+            }
+
+            PipelineHandle CreateComputePipeline(const ComputePipelineDesc& desc) override
+            {
+                Shader* cs = shaders.Get(desc.computeShader);
+                if (!cs || cs->stage != ShaderStage::Compute || !caps.compute)
+                    return {};
+                Pipeline p;
+                p.compute = true;
+                p.program = glCreateProgram();
+                glAttachShader(p.program, cs->id);
+                glLinkProgram(p.program);
+                glDetachShader(p.program, cs->id);
+                GLint ok = 0;
+                glGetProgramiv(p.program, GL_LINK_STATUS, &ok);
+                if (!ok)
+                {
+                    char log[2048];
+                    glGetProgramInfoLog(p.program, sizeof(log), nullptr, log);
+                    HX_LOG_ERROR(GLLog, "compute pipeline {} link failed: {}", desc.debugName, StringView(log));
+                    glDeleteProgram(p.program);
+                    return {};
+                }
+                glUseProgram(p.program);
+                currentProgram = p.program;
+                ApplyBindings(p.program, *cs);
+                return pipelines.Add(Move(p));
+            }
+
+            void ApplyBindings(GLuint program, const Shader& s)
+            {
+                for (const BindingName& b : s.bindings)
+                {
+                    if (b.kind == BindingKind::UniformBuffer)
+                    {
+                        GLuint index = glGetUniformBlockIndex(program, b.name.CStr());
+                        if (index != GL_INVALID_INDEX)
+                            glUniformBlockBinding(program, index, b.slot);
+                    }
+                    else if (b.kind == BindingKind::Texture || (b.kind == BindingKind::StorageTexture && caps.backend == Backend::OpenGL))
+                    {
+                        GLint location = glGetUniformLocation(program, b.name.CStr());
+                        if (location >= 0)
+                            glUniform1i(location, GLint(b.slot));
+                    }
+                    else if (b.kind == BindingKind::StorageBuffer && api.ShaderStorageBlockBinding)
+                    {
+                        GLuint index = glGetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, b.name.CStr());
+                        if (index != GL_INVALID_INDEX)
+                            glShaderStorageBlockBinding(program, index, b.slot);
+                    }
+                }
             }
 
             void Destroy(BufferHandle h) override
@@ -547,7 +593,102 @@ namespace helix::rhi
             }
 
             void BeginFrame() override { context->MakeCurrent(); }
-            void EndFrame() override {}
+
+            void EndFrame() override
+            {
+                timers.Close();
+                PollTimers();
+                timers.Advance();
+            }
+
+            void PollTimers()
+            {
+                if (!caps.gpuTimers)
+                    return;
+                timers.ForEachPending([&](u32 index, GpuTimerFrames::Frame& f) {
+                    Array<GLuint>& queries = timestampQueries[index];
+                    GLuint available = 0;
+                    if (timerExt)
+                        glGetQueryObjectuivEXT(queries[f.queries - 1], GL_QUERY_RESULT_AVAILABLE, &available);
+                    else
+                        glGetQueryObjectuiv(queries[f.queries - 1], GL_QUERY_RESULT_AVAILABLE, &available);
+                    if (!available)
+                        return false;
+                    Array<u64> ticks;
+                    ticks.Resize(f.queries);
+                    for (u32 q = 0; q < f.queries; q++)
+                    {
+                        if (timerExt)
+                            glGetQueryObjectui64vEXT(queries[q], GL_QUERY_RESULT, &ticks[q]);
+                        else
+                            glGetQueryObjectui64v(queries[q], GL_QUERY_RESULT, &ticks[q]);
+                    }
+                    GLint disjoint = 0;
+                    if (timerExt)
+                        glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+                    timers.Resolve(f, ticks.Data(), 1000000000ull, !disjoint);
+                    return true;
+                });
+            }
+
+            u32 ReadGpuTimings(GpuTiming* out, u32 max) override
+            {
+                PollTimers();
+                return timers.Read(out, max);
+            }
+
+            void WriteTimestamp(i32 index)
+            {
+                if (index < 0 || !caps.gpuTimers)
+                    return;
+                Array<GLuint>& queries = timestampQueries[timers.CurrentIndex()];
+                while (queries.Size() <= usize(index))
+                {
+                    GLuint q = 0;
+                    glGenQueries(1, &q);
+                    queries.Push(q);
+                }
+                if (timerExt)
+                {
+                    if (index == 0)
+                    {
+                        GLint disjoint = 0;
+                        glGetIntegerv(GL_GPU_DISJOINT_EXT, &disjoint);
+                    }
+                    glQueryCounterEXT(queries[usize(index)], GL_TIMESTAMP_EXT);
+                }
+                else
+                    glQueryCounter(queries[usize(index)], GL_TIMESTAMP);
+            }
+
+            // Writes from compute become visible to every later use; issued lazily so back to back dispatches share one barrier.
+            void Barrier()
+            {
+                if (!barrierPending)
+                    return;
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                barrierPending = false;
+            }
+
+            void UseProgram(GLuint program)
+            {
+                if (currentProgram != program)
+                {
+                    glUseProgram(program);
+                    currentProgram = program;
+                }
+            }
+
+            bool PrepareDraw(u32 firstInstance)
+            {
+                Barrier();
+                if (!pipeline)
+                    return false;
+                UseProgram(pipeline->program);
+                if (attributesDirty || (firstInstance && !caps.baseInstance))
+                    SetupAttributes(firstInstance);
+                return true;
+            }
             void Present() override { context->Swap(); }
             void Resize(u32, u32) override {}
             void WaitIdle() override { glFinish(); }
@@ -583,7 +724,7 @@ namespace helix::rhi
             void ApplyPipeline(Pipeline* p)
             {
                 const PipelineDesc& d = p->desc;
-                glUseProgram(p->program);
+                UseProgram(p->program);
                 if (d.cull == CullMode::None)
                     glDisable(GL_CULL_FACE);
                 else
@@ -674,6 +815,7 @@ namespace helix::rhi
                     case CommandType::BeginRenderPass:
                     {
                         const RenderPassDesc& rp = CommandData<CmdBeginRenderPass>(data).desc;
+                        Barrier();
                         Texture* first = textures.Get(rp.colors[0].texture);
                         Texture* depth = textures.Get(rp.depth.texture);
                         offscreen = first || depth;
@@ -726,7 +868,13 @@ namespace helix::rhi
                     case CommandType::SetPipeline:
                     {
                         PipelineHandle h = CommandData<CmdSetPipeline>(data).pipeline;
-                        pipeline = pipelines.Get(h);
+                        Pipeline* p = pipelines.Get(h);
+                        if (p && p->compute)
+                        {
+                            computePipeline = p;
+                            break;
+                        }
+                        pipeline = p;
                         if (pipeline && !(h == appliedPipeline))
                         {
                             ApplyPipeline(pipeline);
@@ -775,8 +923,7 @@ namespace helix::rhi
                     case CommandType::Draw:
                     {
                         const CmdDraw& c = CommandData<CmdDraw>(data);
-                        if (attributesDirty || (c.firstInstance && !caps.baseInstance))
-                            SetupAttributes(c.firstInstance);
+                        PrepareDraw(c.firstInstance);
                         GLenum mode = ToTopology(pipeline ? pipeline->desc.topology : PrimitiveTopology::TriangleList);
                         if (c.firstInstance && caps.baseInstance)
                             glDrawArraysInstancedBaseInstance(mode, GLint(c.firstVertex), GLsizei(c.vertexCount), GLsizei(c.instanceCount), c.firstInstance);
@@ -791,8 +938,7 @@ namespace helix::rhi
                     case CommandType::DrawIndexed:
                     {
                         const CmdDrawIndexed& c = CommandData<CmdDrawIndexed>(data);
-                        if (attributesDirty || (c.firstInstance && !caps.baseInstance))
-                            SetupAttributes(c.firstInstance);
+                        PrepareDraw(c.firstInstance);
                         GLenum mode = ToTopology(pipeline ? pipeline->desc.topology : PrimitiveTopology::TriangleList);
                         u32 indexSize = indexType == GL_UNSIGNED_SHORT ? 2 : 4;
                         const void* offset = reinterpret_cast<const void*>(uptr(indexOffset + c.firstIndex * indexSize));
@@ -812,6 +958,7 @@ namespace helix::rhi
                     case CommandType::UpdateBuffer:
                     {
                         const CmdUpdateBuffer& c = CommandData<CmdUpdateBuffer>(data);
+                        Barrier();
                         if (Buffer* b = buffers.Get(c.buffer))
                         {
                             glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
@@ -822,6 +969,7 @@ namespace helix::rhi
                     case CommandType::CopyBuffer:
                     {
                         const CmdCopyBuffer& c = CommandData<CmdCopyBuffer>(data);
+                        Barrier();
                         Buffer* src = buffers.Get(c.source);
                         Buffer* dst = buffers.Get(c.destination);
                         if (src && dst)
@@ -834,6 +982,89 @@ namespace helix::rhi
                     }
                     case CommandType::CopyTextureToBuffer:
                         break;
+                    case CommandType::SetStorageBuffer:
+                    {
+                        const CmdSetStorageBuffer& c = CommandData<CmdSetStorageBuffer>(data);
+                        Buffer* b = buffers.Get(c.buffer);
+                        if (caps.storageBuffers && c.slot < kMaxStorageSlots)
+                            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, c.slot, b ? b->id : 0);
+                        break;
+                    }
+                    case CommandType::SetStorageTexture:
+                    {
+                        const CmdSetStorageTexture& c = CommandData<CmdSetStorageTexture>(data);
+                        Texture* t = textures.Get(c.texture);
+                        if (!caps.compute || c.slot >= kMaxStorageSlots)
+                            break;
+                        if (t)
+                            glBindImageTexture(c.slot, t->id, GLint(c.mipLevel), t->target != GL_TEXTURE_2D, 0, GL_READ_WRITE, ToGL(t->desc.format).internal);
+                        else
+                            glBindImageTexture(c.slot, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+                        break;
+                    }
+                    case CommandType::Dispatch:
+                    case CommandType::DispatchIndirect:
+                    {
+                        if (!computePipeline)
+                            break;
+                        Barrier();
+                        UseProgram(computePipeline->program);
+                        if (type == CommandType::Dispatch)
+                        {
+                            const CmdDispatch& c = CommandData<CmdDispatch>(data);
+                            glDispatchCompute(c.x, c.y, c.z);
+                        }
+                        else
+                        {
+                            const CmdIndirect& c = CommandData<CmdIndirect>(data);
+                            Buffer* b = buffers.Get(c.buffer);
+                            if (!b)
+                                break;
+                            glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, b->id);
+                            glDispatchComputeIndirect(GLintptr(c.offset));
+                        }
+                        barrierPending = true;
+                        break;
+                    }
+                    case CommandType::DrawIndirect:
+                    case CommandType::DrawIndexedIndirect:
+                    {
+                        const CmdIndirect& c = CommandData<CmdIndirect>(data);
+                        Buffer* b = buffers.Get(c.buffer);
+                        if (!b || !caps.drawIndirect || !PrepareDraw(0))
+                            break;
+                        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, b->id);
+                        GLenum mode = ToTopology(pipeline->desc.topology);
+                        bool indexed = type == CommandType::DrawIndexedIndirect;
+                        const void* offset = reinterpret_cast<const void*>(uptr(c.offset));
+                        if (caps.multiDrawIndirect && c.drawCount > 1)
+                        {
+                            if (indexed)
+                                glMultiDrawElementsIndirect(mode, indexType, offset, GLsizei(c.drawCount), GLsizei(c.stride));
+                            else
+                                glMultiDrawArraysIndirect(mode, offset, GLsizei(c.drawCount), GLsizei(c.stride));
+                            break;
+                        }
+                        for (u32 i = 0; i < c.drawCount; i++)
+                        {
+                            const void* at = reinterpret_cast<const void*>(uptr(c.offset + i * c.stride));
+                            if (indexed)
+                                glDrawElementsIndirect(mode, indexType, at);
+                            else
+                                glDrawArraysIndirect(mode, at);
+                        }
+                        break;
+                    }
+                    case CommandType::BeginGpuScope:
+                    {
+                        const char* name;
+                        std::memcpy(&name, data, sizeof(name));
+                        WriteTimestamp(timers.Begin(name));
+                        break;
+                    }
+                    case CommandType::EndGpuScope:
+                        WriteTimestamp(timers.End());
+                        break;
                     }
                 });
             }
@@ -843,6 +1074,7 @@ namespace helix::rhi
                 Texture* t = textures.Get(handle);
                 if (!t || t->target != GL_TEXTURE_2D || IsDepthFormat(t->desc.format))
                     return false;
+                Barrier();
                 u32 w = Max(1u, t->desc.width >> mip), h = Max(1u, t->desc.height >> mip), bpp = FormatBytesPerPixel(t->desc.format);
                 usize row = usize(w) * bpp;
                 if (size < row * h)
@@ -875,6 +1107,7 @@ namespace helix::rhi
                 Buffer* b = buffers.Get(handle);
                 if (!b)
                     return false;
+                Barrier();
                 glBindBuffer(GL_COPY_READ_BUFFER, b->id);
                 if (api.GetBufferSubData)
                 {

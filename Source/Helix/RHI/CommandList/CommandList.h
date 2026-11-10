@@ -23,6 +23,14 @@ namespace helix::rhi
         UpdateBuffer,
         CopyBuffer,
         CopyTextureToBuffer,
+        SetStorageBuffer,
+        SetStorageTexture,
+        Dispatch,
+        DispatchIndirect,
+        DrawIndirect,
+        DrawIndexedIndirect,
+        BeginGpuScope,
+        EndGpuScope,
     };
 
     struct CommandHeader
@@ -122,6 +130,38 @@ namespace helix::rhi
         u32 offset;
     };
 
+    struct CmdSetStorageBuffer
+    {
+        u32 slot;
+        BufferHandle buffer;
+        StorageAccess access;
+    };
+
+    struct CmdSetStorageTexture
+    {
+        u32 slot;
+        TextureHandle texture;
+        u32 mipLevel;
+    };
+
+    struct CmdDispatch
+    {
+        u32 x, y, z;
+    };
+
+    struct CmdIndirect
+    {
+        BufferHandle buffer;
+        u32 offset;
+        u32 drawCount;
+        u32 stride;
+    };
+
+    struct CmdBeginGpuScope
+    {
+        const char* name;
+    };
+
     // Commands are recorded as a compact byte stream on any thread and translated by the device on submit.
     class CommandList
     {
@@ -188,6 +228,34 @@ namespace helix::rhi
         {
             Push(CommandType::CopyTextureToBuffer, CmdCopyTextureToBuffer{texture, mipLevel, buffer, offset});
         }
+
+        // Whole buffer as a storage buffer for every stage; read-write binding is for compute only.
+        void SetStorageBuffer(u32 slot, BufferHandle buffer, StorageAccess access = StorageAccess::ReadWrite)
+        {
+            Push(CommandType::SetStorageBuffer, CmdSetStorageBuffer{slot, buffer, access});
+        }
+
+        void SetStorageTexture(u32 slot, TextureHandle texture, u32 mipLevel = 0)
+        {
+            Push(CommandType::SetStorageTexture, CmdSetStorageTexture{slot, texture, mipLevel});
+        }
+
+        void Dispatch(u32 x, u32 y = 1, u32 z = 1) { Push(CommandType::Dispatch, CmdDispatch{x, y, z}); }
+        void DispatchIndirect(BufferHandle args, u32 offset = 0) { Push(CommandType::DispatchIndirect, CmdIndirect{args, offset, 1, 0}); }
+
+        void DrawIndirect(BufferHandle args, u32 offset = 0, u32 drawCount = 1, u32 stride = sizeof(DrawIndirectArgs))
+        {
+            Push(CommandType::DrawIndirect, CmdIndirect{args, offset, drawCount, stride});
+        }
+
+        void DrawIndexedIndirect(BufferHandle args, u32 offset = 0, u32 drawCount = 1, u32 stride = sizeof(DrawIndexedIndirectArgs))
+        {
+            Push(CommandType::DrawIndexedIndirect, CmdIndirect{args, offset, drawCount, stride});
+        }
+
+        // GPU timer scope; the name must stay valid for the lifetime of the device (a string literal).
+        void BeginGpuScope(const char* name) { Push(CommandType::BeginGpuScope, CmdBeginGpuScope{name}); }
+        void EndGpuScope() { Header(CommandType::EndGpuScope, 0); }
 
         template <typename F>
         void ForEach(F&& f) const

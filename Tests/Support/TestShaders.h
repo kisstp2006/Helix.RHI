@@ -96,4 +96,28 @@ namespace helix::rhi::testing
         desc.source = source;
         return device.CreateShader(desc);
     }
+
+    inline ShaderHandle MakeComputeShader(Device& device, [[maybe_unused]] const char* hlsl, const char* glsl)
+    {
+        ShaderDesc desc;
+        desc.stage = ShaderStage::Compute;
+        if (device.Caps().backend == Backend::D3D11)
+        {
+#if HX_PLATFORM_WINDOWS
+            Blob blob;
+            if (!CompileHlsl(hlsl, "cs_5_0", blob))
+                return {};
+            desc.bytecode = blob.bytes.Data();
+            desc.bytecodeSize = blob.bytes.Size();
+            return device.CreateShader(desc);
+#else
+            return {};
+#endif
+        }
+        bool es = device.Caps().backend == Backend::OpenGLES;
+        const char* header = es ? "#version 310 es\nprecision highp float;\nprecision highp int;\nprecision highp image2D;\n" : "#version 430 core\n";
+        String source = helix::Format("{}{}", header, glsl);
+        desc.source = source;
+        return device.CreateShader(desc);
+    }
 }
