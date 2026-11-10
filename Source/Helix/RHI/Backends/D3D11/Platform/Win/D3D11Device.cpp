@@ -697,15 +697,17 @@ namespace helix::rhi
                 bool depth = IsDepthFormat(desc.format);
                 UINT bind = (desc.usage & TextureSampled && !depth ? D3D11_BIND_SHADER_RESOURCE : 0) | (desc.usage & TextureRenderTarget ? D3D11_BIND_RENDER_TARGET : 0) |
                             (desc.usage & TextureDepthStencil ? D3D11_BIND_DEPTH_STENCIL : 0) | (desc.usage & TextureStorage ? D3D11_BIND_UNORDERED_ACCESS : 0);
+                // Initial data is one image per layer (per face of a cube, one block for a volume), each rows top first.
                 u32 bpp = FormatBytesPerPixel(desc.format);
-                D3D11_SUBRESOURCE_DATA init[6] = {};
-                for (u32 i = 0; i < 6; i++)
-                    init[i] = {static_cast<const u8*>(desc.initialData) + usize(i) * desc.width * desc.height * bpp, desc.width * bpp, desc.width * desc.height * bpp};
+                u32 layers = desc.type == TextureType::TextureCube ? 6u : desc.type == TextureType::Texture3D ? 1u : Max(desc.depthOrLayers, 1u);
+                Array<D3D11_SUBRESOURCE_DATA> init;
+                for (u32 i = 0; i < layers; i++)
+                    init.Push({static_cast<const u8*>(desc.initialData) + usize(i) * desc.width * desc.height * bpp, desc.width * bpp, desc.width * desc.height * bpp});
                 if (desc.type == TextureType::Texture3D)
                 {
                     D3D11_TEXTURE3D_DESC td{desc.width, desc.height, desc.depthOrLayers, desc.mipLevels, ToDxgi(desc.format), D3D11_USAGE_DEFAULT, bind, 0, 0};
                     ID3D11Texture3D* tex = nullptr;
-                    if (Failed(device->CreateTexture3D(&td, desc.initialData && desc.mipLevels == 1 ? init : nullptr, &tex)))
+                    if (Failed(device->CreateTexture3D(&td, desc.initialData && desc.mipLevels == 1 ? init.Data() : nullptr, &tex)))
                         return {};
                     t.resource = tex;
                 }
@@ -724,12 +726,37 @@ namespace helix::rhi
                     td.MiscFlags = cube ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
                     ID3D11Texture2D* tex = nullptr;
                     bool withData = desc.initialData && desc.mipLevels == 1;
-                    if (Failed(device->CreateTexture2D(&td, withData ? init : nullptr, &tex)))
+                    if (Failed(device->CreateTexture2D(&td, withData ? init.Data() : nullptr, &tex)))
                         return {};
                     t.resource = tex;
                 }
                 if (bind & D3D11_BIND_SHADER_RESOURCE)
-                    device->CreateShaderResourceView(t.resource, nullptr, &t.srv);
+                {
+                    // The view follows the texture type, so a one layer array is still an array to the shader.
+                    D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+                    sd.Format = ToDxgi(desc.format);
+                    if (desc.type == TextureType::Texture2DArray)
+                    {
+                        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+                        sd.Texture2DArray = {0, desc.mipLevels, 0, layers};
+                    }
+                    else if (desc.type == TextureType::Texture3D)
+                    {
+                        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+                        sd.Texture3D = {0, desc.mipLevels};
+                    }
+                    else if (desc.type == TextureType::TextureCube)
+                    {
+                        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+                        sd.TextureCube = {0, desc.mipLevels};
+                    }
+                    else
+                    {
+                        sd.ViewDimension = desc.sampleCount > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+                        sd.Texture2D = {0, desc.mipLevels};
+                    }
+                    device->CreateShaderResourceView(t.resource, &sd, &t.srv);
+                }
                 if (bind & D3D11_BIND_RENDER_TARGET)
                     device->CreateRenderTargetView(t.resource, nullptr, &t.rtv);
                 if (bind & D3D11_BIND_DEPTH_STENCIL)
