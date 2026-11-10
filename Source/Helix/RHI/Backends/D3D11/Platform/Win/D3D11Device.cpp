@@ -2,6 +2,7 @@
 #include <Helix/RHI/Resources/Implementation/RangeAllocator.h>
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
 #include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
+#include <Helix/RHI/Transient/Implementation/TransientRing.h>
 
 #include <Helix/D3D11/D3D11.h>
 #include <Helix/RHI/Device/Device.h>
@@ -218,8 +219,8 @@ namespace helix::rhi
             ID3D11Buffer* transientBuffer = nullptr;
             Array<u8> transientCpu;
             u32 transientSize = 0;
-            u32 transientHead = 0;
-            u32 transientUploaded = 0;
+            TransientRing transientRing;
+            TransientUploads transientUploads;
             ID3D11Buffer* slotBuffers[kMaxUniformSlots] = {};
 
             Array<BindlessPool> bindlessPools;
@@ -331,6 +332,7 @@ namespace helix::rhi
 
                 transientSize = desc.transientBufferSize;
                 transientCpu.Resize(transientSize);
+                transientRing.Init(transientCpu.Data(), transientSize, 256, false);
                 D3D11_BUFFER_DESC bd{transientSize, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
                 if (Failed(device->CreateBuffer(&bd, nullptr, &transientBuffer)))
                     return false;
@@ -976,38 +978,51 @@ namespace helix::rhi
 
             TransientAllocation AllocateTransient(u32 size) override
             {
-                u32 aligned = u32(AlignUp(size, 256));
-                if (transientHead + aligned > transientSize)
-                {
-                    UploadTransient();
-                    transientHead = transientUploaded = 0;
-                    wrapped = true;
-                }
-                TransientAllocation a{transient, transientHead, size, transientCpu.Data() + transientHead};
-                transientHead += aligned;
+                TransientAllocation a{};
+                if (size <= transientSize)
+                    transientRing.TryAllocate(size, transient, a);
                 return a;
             }
 
-            bool wrapped = true;
-
-            void UploadTransient()
+            // Copies the ranges this list reads from the CPU side ring into the GPU buffer; nothing else is touched, so
+            // other threads may keep filling their own allocations meanwhile.
+            void UploadTransient(const CommandList& commands)
             {
-                if (transientHead == transientUploaded)
+                Span<const CommandList::TransientRange> ranges = commands.TransientRanges();
+                if (ranges.Empty() || !caps.uniformBufferOffsets)
                     return;
+                bool discard = false;
+                for (const CommandList::TransientRange& r : ranges)
+                    discard = discard || transientUploads.Conflicts(r.begin, Min(r.end, transientSize), r.generation);
+                if (discard)
+                    transientUploads.Clear();
                 D3D11_MAPPED_SUBRESOURCE m{};
-                if (Succeeded(context->Map(transientBuffer, 0, wrapped ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE, 0, &m)))
+                bool mapped = false, failed = false;
+                for (const CommandList::TransientRange& r : ranges)
                 {
-                    if (wrapped)
-                        std::memcpy(m.pData, transientCpu.Data(), transientHead);
-                    else
-                        std::memcpy(static_cast<u8*>(m.pData) + transientUploaded, transientCpu.Data() + transientUploaded, transientHead - transientUploaded);
-                    context->Unmap(transientBuffer, 0);
+                    transientUploads.Add(r.begin, Min(r.end, transientSize), r.generation, [&](u32 begin, u32 end) {
+                        if (!mapped && !failed)
+                        {
+                            mapped = Succeeded(context->Map(transientBuffer, 0, discard ? D3D11_MAP_WRITE_DISCARD : D3D11_MAP_WRITE_NO_OVERWRITE, 0, &m));
+                            failed = !mapped;
+                        }
+                        if (mapped)
+                            std::memcpy(static_cast<u8*>(m.pData) + begin, transientCpu.Data() + begin, end - begin);
+                    });
                 }
-                wrapped = false;
-                transientUploaded = transientHead;
+                if (mapped)
+                    context->Unmap(transientBuffer, 0);
             }
 
-            void BeginFrame() override {}
+            // Thread chunks of the ring end with the frame (or with each submit outside frames): a chunk kept longer could
+            // hand out old memory right before the ring wraps and the next lap would give the same bytes to someone else.
+            bool inFrame = false;
+
+            void BeginFrame() override
+            {
+                inFrame = true;
+                transientRing.NextEpoch();
+            }
 
             void EndFrame() override
             {
@@ -1015,6 +1030,8 @@ namespace helix::rhi
                     context->End(disjointQueries[timers.CurrentIndex()]);
                 PollTimers();
                 timers.Advance();
+                inFrame = false;
+                transientRing.NextEpoch();
             }
 
             void PollTimers()
@@ -1205,7 +1222,7 @@ namespace helix::rhi
 
             void Submit(const CommandList& commands) override
             {
-                UploadTransient();
+                UploadTransient(commands);
                 UploadBindless();
                 UploadBufferTable();
                 Pipeline* pipeline = nullptr;
@@ -1460,6 +1477,8 @@ namespace helix::rhi
                         break;
                     }
                 });
+                if (!inFrame)
+                    transientRing.NextEpoch();
             }
 
             bool ReadTexture(TextureHandle handle, u32 mip, void* out, usize size) override

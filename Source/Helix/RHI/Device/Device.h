@@ -61,6 +61,8 @@ namespace helix::rhi
         virtual void UnregisterBindlessBuffer(u32 index) = 0;
 
         // Per-frame upload memory for uniform data; valid until the frame that allocated it has been executed by the GPU.
+        // Safe to call from any thread, without locks. When several threads record, bracket the frame with BeginFrame
+        // and EndFrame and submit its command lists in between; one frame may use at most transientBufferSize bytes.
         virtual TransientAllocation AllocateTransient(u32 size) = 0;
 
         // Scopes of the newest frame whose timestamps are ready (frames end at EndFrame); returns the count written.

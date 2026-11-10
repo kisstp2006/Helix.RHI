@@ -9,9 +9,12 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - A `PipelineDesc` holds shaders, vertex layout, topology, raster, depth and blend state.
 - A `CommandList` is a compact byte stream recorded without virtual calls on any thread; `Device::Submit` translates it on the device thread.
 - Uniform data per draw comes from `AllocateTransient`, a ring with constant buffer offsets on D3D11.1 and `glBindBufferRange` on GL.
-  On GL 4.4 (`ARB_buffer_storage`) the ring is persistently and coherently mapped: data is written in place and fences per
-  submit make a wrapping allocation wait only for the submit that still reads that region. Elsewhere the ring is uploaded once
-  per submit. One submit may use at most `DeviceDesc::transientBufferSize` bytes.
+  It is lock free and safe from any thread: a thread takes a chunk of the ring with one compare-and-swap and allocates from it
+  privately. A command list remembers the ranges it binds, and `Submit` uploads exactly those, so lists can be recorded in
+  parallel and submitted in any order. On GL 4.4 (`ARB_buffer_storage`) the ring is persistently mapped and written in place;
+  fences release its memory once the GPU has passed the frame.
+- When several threads record, bracket the frame with `BeginFrame` and `EndFrame` and submit its lists in between. One frame
+  (or one submit outside frames) may use at most `DeviceDesc::transientBufferSize` bytes.
 - A render pass without textures targets the swap chain back buffer.
 - Offscreen images have the same memory layout on every backend (top row first): GL uses clip control with an upper left origin when available, `ReadTexture` returns rows top first everywhere.
 - Shaders: DXBC bytecode for D3D11, GLSL or ESSL source for GL with a name to slot binding table.
@@ -63,6 +66,7 @@ recorded on the profiler track `GPU`. Available on D3D11, OpenGL 3.3+ and OpenGL
 | `Source/Helix/RHI/Bindless/` | `Bindless.h`, descriptor table shared by both backends |
 | `Source/Helix/RHI/Resources/` | Handle pools, range allocator of the bindless buffer heap |
 | `Source/Helix/RHI/Timing/` | Timestamp query frames shared by both backends |
+| `Source/Helix/RHI/Transient/` | Lock free transient ring and upload tracking shared by both backends |
 | `Source/Helix/RHI/Backends/D3D11/`, `Backends/GL/` | Backends, context creation in `Platform/<Os>/` |
 | `Tests/` | Device tests by topic, `Tests/Support/` holds the test device, shaders and the discrete GPU entry point |
 | `Examples/Triangle/` | Rotating triangle |
@@ -99,7 +103,7 @@ device->Present();
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
-textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits and a 10000 draw benchmark. D3D11 tests compile
+textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. D3D11 tests compile
 their HLSL with the operating system compiler; it is never linked into the library.
 
 Rendered images are compared with PNG golden images in `Tests/Golden/` (Helix.Image codec, at most 2 per channel apart), so

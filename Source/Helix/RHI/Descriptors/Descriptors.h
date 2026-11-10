@@ -432,5 +432,8 @@ namespace helix::rhi
         u32 offset = 0;
         u32 size = 0;
         void* data = nullptr;
+        // Bytes reserved in the ring including alignment padding, and how often the ring had wrapped at that time.
+        u32 span = 0;
+        u32 generation = 0;
     };
 }

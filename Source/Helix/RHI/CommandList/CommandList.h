@@ -168,7 +168,18 @@ namespace helix::rhi
     public:
         explicit CommandList(Allocator& allocator = HeapAllocator()) : bytes_(allocator) {}
 
-        void Reset() { bytes_.Clear(); }
+        void Reset()
+        {
+            bytes_.Clear();
+            transient_.Clear();
+        }
+
+        struct TransientRange
+        {
+            u32 begin, end, generation;
+        };
+        // Ranges of transient memory this list reads, merged where adjacent; the device uploads exactly these on submit.
+        Span<const TransientRange> TransientRanges() const { return transient_; }
         bool Empty() const { return bytes_.Empty(); }
         Span<const u8> Bytes() const { return bytes_; }
 
@@ -193,7 +204,16 @@ namespace helix::rhi
             Push(CommandType::SetUniformBuffer, CmdSetUniformBuffer{slot, buffer, offset, size});
         }
 
-        void SetUniformBuffer(u32 slot, const TransientAllocation& a) { SetUniformBuffer(slot, a.buffer, a.offset, a.size); }
+        // Transient memory must be bound through this overload so the list knows which ranges it uses.
+        void SetUniformBuffer(u32 slot, const TransientAllocation& a)
+        {
+            u32 end = a.offset + Max(a.span, a.size);
+            if (transient_.Empty() || a.offset > transient_.Back().end || a.offset < transient_.Back().begin || a.generation != transient_.Back().generation)
+                transient_.Push({a.offset, end, a.generation});
+            else if (end > transient_.Back().end)
+                transient_.Back().end = end;
+            SetUniformBuffer(slot, a.buffer, a.offset, a.size);
+        }
 
         void SetTexture(u32 slot, TextureHandle texture, SamplerHandle sampler)
         {
@@ -287,6 +307,7 @@ namespace helix::rhi
         }
 
         Array<u8> bytes_;
+        Array<TransientRange> transient_;
     };
 
     template <typename T>

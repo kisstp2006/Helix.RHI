@@ -3,6 +3,9 @@
 #include <Helix/RHI/Resources/Implementation/ResourcePool.h>
 #include <Helix/RHI/Backends/GL/Implementation/GLContext.h>
 #include <Helix/RHI/Timing/Implementation/GpuTimerFrames.h>
+#include <Helix/RHI/Transient/Implementation/TransientRing.h>
+
+#include <Helix/Platform/Threading/Thread.h>
 
 #include <Helix/Core/Containers/HashMap.h>
 #include <Helix/Core/Logging/Log.h>
@@ -171,19 +174,25 @@ namespace helix::rhi
             BufferHandle transient;
             GLuint transientId = 0;
             Array<u8> transientCpu;
-            u32 transientSize = 0, transientHead = 0, transientUploaded = 0;
-            bool transientOrphan = true;
+            u32 transientSize = 0;
+            TransientRing transientRing;
+            TransientUploads transientUploads;
 
-            // Persistent coherent mapping (GL 4.4): allocations are written in place, fences guard regions the GPU may still read.
-            struct TransientFence
+            // Persistent coherent mapping (GL 4.4): allocations are written in place. Every submit leaves a fence; the
+            // memory of a group is free again once its fence has passed. Inside BeginFrame and EndFrame all submits
+            // form one group, because any of them may read what the frame allocated.
+            struct TransientGroup
             {
                 GLsync sync;
-                u32 begin, end;
+                u64 begin, end;
+                bool open;
             };
             u8* transientMapped = nullptr;
-            Array<TransientFence> transientFences;
-            u32 transientFenced = 0;
-            bool transientPending = false, transientWrapped = false;
+            Array<TransientGroup> transientGroups;
+            u64 transientFenced = 0;
+            u64 deviceThread = 0;
+            bool inFrame = false;
+            bool transientWarned = false;
 
             BindlessTable<GLuint64> bindless;
             GLuint bindlessBuffer = 0;
@@ -301,6 +310,8 @@ namespace helix::rhi
                     transientCpu.Resize(transientSize);
                     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(transientSize), nullptr, GL_STREAM_DRAW);
                 }
+                transientRing.Init(transientMapped ? transientMapped : transientCpu.Data(), transientSize, caps.uniformBufferAlignment, transientMapped != nullptr);
+                deviceThread = platform::CurrentThreadId();
                 transient = buffers.Add(Buffer{transientId, BufferDesc{transientSize, BufferUniform, MemoryType::Upload}});
                 HX_LOG_INFO(GLLog, "{} {}.{} on {}", es ? (web ? "WebGL" : "OpenGL ES") : "OpenGL", major, minor, caps.renderer);
                 return glGetError() == GL_NO_ERROR || true;
@@ -316,8 +327,8 @@ namespace helix::rhi
                     context = nullptr;
                     return;
                 }
-                for (const TransientFence& f : transientFences)
-                    glDeleteSync(f.sync);
+                for (const TransientGroup& g : transientGroups)
+                    glDeleteSync(g.sync);
                 if (transientMapped)
                 {
                     glBindBuffer(GL_UNIFORM_BUFFER, transientId);
@@ -698,96 +709,142 @@ namespace helix::rhi
 
             TransientAllocation AllocateTransient(u32 size) override
             {
-                u32 aligned = u32(AlignUp(size, caps.uniformBufferAlignment));
-                if (transientMapped)
-                {
-                    if (transientHead + aligned > transientSize)
-                    {
-                        // The skipped tail is given up too, so the remaining fences stay ordered from the ring start.
-                        WaitTransient(transientHead, transientSize);
-                        transientHead = 0;
-                        transientWrapped = true;
-                    }
-                    // Fences are ordered along the ring, so only the oldest one can lie directly ahead.
-                    while (!transientFences.Empty() && HitsFence(transientFences[0], transientHead, transientHead + aligned))
-                        WaitTransient(transientHead, transientHead + aligned);
-                    TransientAllocation a{transient, transientHead, size, transientMapped + transientHead};
-                    transientHead += aligned;
-                    transientPending = true;
+                TransientAllocation a{};
+                if (size > transientSize)
                     return a;
-                }
-                if (transientHead + aligned > transientSize)
+                for (u32 spins = 0; !transientRing.TryAllocate(size, transient, a); spins++)
                 {
-                    UploadTransient();
-                    transientHead = transientUploaded = 0;
-                    transientOrphan = true;
+                    // Only the device thread may talk to GL; other threads wait for it to release memory.
+                    if (platform::CurrentThreadId() == deviceThread)
+                        ReleaseTransient(true);
+                    else if (spins < 200000)
+                        platform::YieldThread();
+                    else
+                        OverrunTransient();
                 }
-                TransientAllocation a{transient, transientHead, size, transientCpu.Data() + transientHead};
-                transientHead += aligned;
                 return a;
             }
 
-            static bool Overlaps(u32 a0, u32 a1, u32 b0, u32 b1) { return a0 < b1 && b0 < a1; }
-
-            bool HitsFence(const TransientFence& f, u32 begin, u32 end) const
+            void UpdateTransientLimit()
             {
-                return f.begin < f.end ? Overlaps(begin, end, f.begin, f.end)
-                                       : Overlaps(begin, end, f.begin, transientSize) || Overlaps(begin, end, 0, f.end);
+                transientRing.SetLimit((transientGroups.Empty() ? transientFenced : transientGroups[0].begin) + transientSize);
             }
 
-            // Waits for the oldest submissions until none of them still reads [begin, end).
-            void WaitTransient(u32 begin, u32 end)
+            // The ring is too small for the frames in flight: give up protecting the oldest data instead of hanging.
+            void OverrunTransient()
             {
-                i32 last = -1;
-                for (usize i = 0; i < transientFences.Size(); i++)
-                {
-                    if (HitsFence(transientFences[i], begin, end))
-                        last = i32(i);
-                }
-                if (last < 0)
-                    return;
-                while (glClientWaitSync(transientFences[usize(last)].sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull) == GL_TIMEOUT_EXPIRED)
-                {
-                }
-                for (i32 i = 0; i <= last; i++)
-                    glDeleteSync(transientFences[usize(i)].sync);
-                for (i32 i = 0; i <= last; i++)
-                    transientFences.RemoveAt(0);
+                if (!transientWarned)
+                    HX_LOG_ERROR(GLLog, "transient ring of {} bytes is too small for one frame, uniform data may be overwritten", transientSize);
+                transientWarned = true;
+                transientRing.SetLimit(transientRing.Head() + transientSize);
             }
 
+            // Frees the groups whose fences have passed; with `block` it waits for the oldest one when nothing is free yet.
+            void ReleaseTransient(bool block)
+            {
+                bool released = false;
+                while (!transientGroups.Empty() && !transientGroups[0].open)
+                {
+                    GLenum state = glClientWaitSync(transientGroups[0].sync, 0, 0);
+                    if (state != GL_ALREADY_SIGNALED && state != GL_CONDITION_SATISFIED)
+                    {
+                        if (!block || released)
+                            break;
+                        while (glClientWaitSync(transientGroups[0].sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull) == GL_TIMEOUT_EXPIRED)
+                        {
+                        }
+                    }
+                    glDeleteSync(transientGroups[0].sync);
+                    transientGroups.RemoveAt(0);
+                    released = true;
+                }
+                if (released)
+                    UpdateTransientLimit();
+                else if (block)
+                    OverrunTransient();
+            }
+
+            // Also ends the thread chunks outside frames: a chunk kept longer could hand out old memory right before the
+            // ring wraps, and the next lap would give the same bytes to another thread.
             void FenceTransient()
             {
-                if (!transientMapped || !transientPending)
+                if (!transientMapped)
+                {
+                    if (!inFrame)
+                        transientRing.NextEpoch();
                     return;
-                u32 begin = transientWrapped && transientHead >= transientFenced ? 0 : transientFenced;
-                u32 end = transientWrapped && transientHead >= transientFenced ? transientSize : transientHead;
-                transientFences.Push({glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), begin, end});
-                transientFenced = transientHead;
-                transientPending = transientWrapped = false;
+                }
+                u64 head = transientRing.Head();
+                if (inFrame && !transientGroups.Empty() && transientGroups.Back().open)
+                {
+                    TransientGroup& g = transientGroups.Back();
+                    glDeleteSync(g.sync);
+                    g.sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                    g.end = transientFenced = head;
+                    return;
+                }
+                if (head == transientFenced)
+                    return;
+                transientGroups.Push({glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), transientFenced, head, inFrame});
+                transientFenced = head;
+                if (!inFrame)
+                    transientRing.NextEpoch();
             }
 
-            void UploadTransient()
+            // Without a persistent mapping the ranges this list reads are copied into the buffer; a wrapped ring gets a
+            // fresh buffer store first, because the GPU may still read the old contents.
+            void UploadTransient(const CommandList& commands)
             {
-                if (transientMapped || transientHead == transientUploaded)
+                Span<const CommandList::TransientRange> ranges = commands.TransientRanges();
+                if (transientMapped || ranges.Empty())
                     return;
                 glBindBuffer(GL_UNIFORM_BUFFER, transientId);
-                if (transientOrphan)
+                bool orphan = false;
+                for (const CommandList::TransientRange& r : ranges)
+                    orphan = orphan || transientUploads.Conflicts(r.begin, Min(r.end, transientSize), r.generation);
+                if (orphan)
                 {
+                    transientUploads.Clear();
                     glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(transientSize), nullptr, GL_STREAM_DRAW);
-                    transientOrphan = false;
                 }
-                glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(transientUploaded), GLsizeiptr(transientHead - transientUploaded),
-                                transientCpu.Data() + transientUploaded);
-                transientUploaded = transientHead;
+                for (const CommandList::TransientRange& r : ranges)
+                {
+                    transientUploads.Add(r.begin, Min(r.end, transientSize), r.generation, [&](u32 begin, u32 end) {
+                        glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(begin), GLsizeiptr(end - begin), transientCpu.Data() + begin);
+                    });
+                }
             }
 
-            void BeginFrame() override { context->MakeCurrent(); }
+            void BeginFrame() override
+            {
+                context->MakeCurrent();
+                deviceThread = platform::CurrentThreadId();
+                inFrame = true;
+                // Thread chunks end with the frame, see FenceTransient.
+                transientRing.NextEpoch();
+                if (!transientMapped)
+                    return;
+                // Start the frame with at least half of the ring free, so worker threads rarely have to wait for the GPU.
+                ReleaseTransient(false);
+                while (transientRing.Limit() - transientRing.Head() < transientSize / 2 && !transientGroups.Empty() && !transientGroups[0].open)
+                    ReleaseTransient(true);
+            }
 
             void EndFrame() override
             {
                 timers.Close();
                 PollTimers();
                 timers.Advance();
+                inFrame = false;
+                if (transientMapped)
+                {
+                    if (!transientGroups.Empty() && transientGroups.Back().open)
+                    {
+                        transientGroups.Back().open = false;
+                        transientGroups.Back().end = transientFenced = transientRing.Head();
+                    }
+                }
+                transientRing.NextEpoch();
             }
 
             void PollTimers()
@@ -995,7 +1052,7 @@ namespace helix::rhi
 
             void Submit(const CommandList& commands) override
             {
-                UploadTransient();
+                UploadTransient(commands);
                 UploadBindless();
                 UploadBufferTable();
                 glBindVertexArray(vao);
