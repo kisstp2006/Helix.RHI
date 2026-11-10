@@ -195,6 +195,11 @@ namespace helix::rhi
                 GetVersion(major, minor, es);
                 es = es || context->IsES();
                 auto at = [&](int ma, int mi) { return major > ma || (major == ma && minor >= mi); };
+                if ((es ? !at(3, 0) : !at(3, 3)) || !api.GenVertexArrays || !api.BindBufferRange || !api.GenSamplers)
+                {
+                    HX_LOG_WARNING(GLLog, "{} {}.{} is below the minimum (GL 3.3 or ES 3.0)", es ? "OpenGL ES" : "OpenGL", major, minor);
+                    return false;
+                }
                 caps.backend = desc.backend == Backend::WebGL2 ? Backend::WebGL2 : es ? Backend::OpenGLES : Backend::OpenGL;
                 caps.apiMajor = u32(major);
                 caps.apiMinor = u32(minor);
