@@ -246,6 +246,17 @@ namespace helix::rhi
             ID3D11Buffer* indexBuffer = nullptr;
             DXGI_FORMAT indexFormat = DXGI_FORMAT_R16_UINT;
             UINT indexOffset = 0;
+            // Last graphics state sent to the context, used to skip commands that would not change anything.
+            Pipeline* appliedPipeline = nullptr;
+            ID3D11ShaderResourceView* boundSrvs[kMaxTextureSlots] = {};
+            ID3D11SamplerState* boundSamplers[kMaxTextureSlots] = {};
+
+            // Binding a texture as a render target or UAV silently unbinds it as a shader input, so forget what is bound.
+            void ForgetBoundTextures()
+            {
+                for (auto& v : boundSrvs)
+                    v = reinterpret_cast<ID3D11ShaderResourceView*>(uptr(1));
+            }
 
             u32 heapSize = 0;
             ID3D11Buffer* heap = nullptr;
@@ -892,6 +903,7 @@ namespace helix::rhi
                 Pipeline p;
                 if (pipelines.Remove(h, p))
                     ReleasePipeline(p);
+                appliedPipeline = nullptr;
             }
 
             u32 RegisterBindless(TextureHandle texture, SamplerHandle sampler) override
@@ -1095,6 +1107,7 @@ namespace helix::rhi
                 ID3D11UnorderedAccessView* none[kMaxStorageSlots + 1] = {};
                 context->CSSetUnorderedAccessViews(0, kMaxStorageSlots + 1, none, nullptr);
                 storageSrvsDirty = true;
+                ForgetBoundTextures();
                 // Binding a UAV unbinds the same buffer from the input assembler, so restore it.
                 for (u32 i = 0; i < kMaxVertexBuffers; i++)
                     context->IASetVertexBuffers(i, 1, &vertexBindings[i].buffer, &vertexBindings[i].stride, &vertexBindings[i].offset);
@@ -1222,6 +1235,7 @@ namespace helix::rhi
                             height = depth->desc.height;
                         }
                         context->OMSetRenderTargets(rp.colorCount, rtvs, depth ? depth->dsv : nullptr);
+                        ForgetBoundTextures();
                         for (u32 i = 0; i < rp.colorCount; i++)
                             if (rp.colors[i].load == LoadOp::Clear && rtvs[i])
                                 context->ClearRenderTargetView(rtvs[i], rp.colors[i].clearColor);
@@ -1259,8 +1273,9 @@ namespace helix::rhi
                             break;
                         }
                         pipeline = p;
-                        if (!pipeline)
+                        if (!pipeline || pipeline == appliedPipeline)
                             break;
+                        appliedPipeline = pipeline;
                         context->IASetInputLayout(pipeline->layout);
                         context->IASetPrimitiveTopology(pipeline->topology);
                         context->VSSetShader(pipeline->vs, nullptr, 0);
@@ -1276,6 +1291,9 @@ namespace helix::rhi
                         Buffer* b = buffers.Get(c.buffer);
                         UINT stride = pipeline ? pipeline->strides[c.slot] : 0, offset = c.offset + (b ? b->heapOffset : 0);
                         ID3D11Buffer* buffer = b ? b->buffer : nullptr;
+                        const VertexBinding& bound = vertexBindings[c.slot];
+                        if (bound.buffer == buffer && bound.stride == stride && bound.offset == offset)
+                            break;
                         context->IASetVertexBuffers(c.slot, 1, &buffer, &stride, &offset);
                         vertexBindings[c.slot] = {buffer, stride, offset};
                         break;
@@ -1284,9 +1302,14 @@ namespace helix::rhi
                     {
                         const CmdSetIndexBuffer& c = CommandData<CmdSetIndexBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        indexBuffer = b ? b->buffer : nullptr;
-                        indexFormat = c.type == IndexType::U16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
-                        indexOffset = c.offset + (b ? b->heapOffset : 0);
+                        ID3D11Buffer* buffer = b ? b->buffer : nullptr;
+                        DXGI_FORMAT format = c.type == IndexType::U16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT;
+                        UINT offset = c.offset + (b ? b->heapOffset : 0);
+                        if (buffer == indexBuffer && format == indexFormat && offset == indexOffset)
+                            break;
+                        indexBuffer = buffer;
+                        indexFormat = format;
+                        indexOffset = offset;
                         context->IASetIndexBuffer(indexBuffer, indexFormat, indexOffset);
                         break;
                     }
@@ -1303,6 +1326,10 @@ namespace helix::rhi
                         Sampler* s = samplers.Get(c.sampler);
                         ID3D11ShaderResourceView* srv = t ? t->srv : nullptr;
                         ID3D11SamplerState* state = s ? s->state : nullptr;
+                        if (boundSrvs[c.slot] == srv && boundSamplers[c.slot] == state)
+                            break;
+                        boundSrvs[c.slot] = srv;
+                        boundSamplers[c.slot] = state;
                         context->PSSetShaderResources(c.slot, 1, &srv);
                         context->PSSetSamplers(c.slot, 1, &state);
                         context->VSSetShaderResources(c.slot, 1, &srv);

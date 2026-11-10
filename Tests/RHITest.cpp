@@ -302,8 +302,12 @@ HX_TEST(RHI, TenThousandDrawsBenchmark)
         BufferHandle vb = d.CreateBuffer({.size = sizeof(verts), .usage = BufferVertex, .initialData = verts});
         TextureHandle target = d.CreateTexture({.format = Format::RGBA8Unorm, .width = 512, .height = 512, .usage = TextureRenderTarget});
         f64 best = 1e9;
+        // The second pass repeats the pipeline and vertex buffer before every draw, as naive callers do.
+        for (int restate = 0; restate < 2; restate++)
         for (int round = 0; round < 5; round++)
         {
+            if (round == 0)
+                best = 1e9;
             platform::Stopwatch sw;
             CommandList cl;
             RenderPassDesc rp;
@@ -321,6 +325,11 @@ HX_TEST(RHI, TenThousandDrawsBenchmark)
                 p[3] = 1.0f;
                 p[4] = f32(i % 100) / 50.0f - 1.0f;
                 p[5] = f32(i / 100) / 50.0f - 1.0f;
+                if (restate)
+                {
+                    cl.SetPipeline(pipe);
+                    cl.SetVertexBuffer(0, vb);
+                }
                 cl.SetUniformBuffer(0, a);
                 cl.Draw(3);
             }
@@ -333,7 +342,8 @@ HX_TEST(RHI, TenThousandDrawsBenchmark)
             if (total < best)
                 best = total;
             if (round == 4)
-                std::printf("    %s: 10k draws record %.2f ms, submit %.2f ms, with GPU %.2f ms (best %.2f)\n", BackendName(d.Caps().backend), record, submit, total, best);
+                std::printf("    %s: 10k draws%s record %.2f ms, submit %.2f ms, with GPU %.2f ms (best %.2f)\n", BackendName(d.Caps().backend), restate ? " with repeated state" : "", record,
+                            submit, total, best);
         }
         HX_CHECK(best < 1000.0);
         d.Destroy(target);
