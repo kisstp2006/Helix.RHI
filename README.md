@@ -8,7 +8,10 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - Resources are typed handles (`BufferHandle`, `TextureHandle`, `SamplerHandle`, `ShaderHandle`, `PipelineHandle`) with generation checks.
 - A `PipelineDesc` holds shaders, vertex layout, topology, raster, depth and blend state.
 - A `CommandList` is a compact byte stream recorded without virtual calls on any thread; `Device::Submit` translates it on the device thread.
-- Uniform data per draw comes from `AllocateTransient`, a per-frame ring that is uploaded once per submit (constant buffer offsets on D3D11.1, `glBindBufferRange` on GL).
+- Uniform data per draw comes from `AllocateTransient`, a ring with constant buffer offsets on D3D11.1 and `glBindBufferRange` on GL.
+  On GL 4.4 (`ARB_buffer_storage`) the ring is persistently and coherently mapped: data is written in place and fences per
+  submit make a wrapping allocation wait only for the submit that still reads that region. Elsewhere the ring is uploaded once
+  per submit. One submit may use at most `DeviceDesc::transientBufferSize` bytes.
 - A render pass without textures targets the swap chain back buffer.
 - Offscreen images have the same memory layout on every backend (top row first): GL uses clip control with an upper left origin when available, `ReadTexture` returns rows top first everywhere.
 - Shaders: DXBC bytecode for D3D11, GLSL or ESSL source for GL with a name to slot binding table.
@@ -96,7 +99,7 @@ device->Present();
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
-textures, a GPU driven indirect draw, GPU timer scopes and a 10000 draw benchmark. D3D11 tests compile
+textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits and a 10000 draw benchmark. D3D11 tests compile
 their HLSL with the operating system compiler; it is never linked into the library.
 
 ## Build

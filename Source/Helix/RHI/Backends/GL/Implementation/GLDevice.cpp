@@ -174,6 +174,17 @@ namespace helix::rhi
             u32 transientSize = 0, transientHead = 0, transientUploaded = 0;
             bool transientOrphan = true;
 
+            // Persistent coherent mapping (GL 4.4): allocations are written in place, fences guard regions the GPU may still read.
+            struct TransientFence
+            {
+                GLsync sync;
+                u32 begin, end;
+            };
+            u8* transientMapped = nullptr;
+            Array<TransientFence> transientFences;
+            u32 transientFenced = 0;
+            bool transientPending = false, transientWrapped = false;
+
             BindlessTable<GLuint64> bindless;
             GLuint bindlessBuffer = 0;
             u32 bindlessCapacity = 0;
@@ -271,10 +282,25 @@ namespace helix::rhi
                     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
                 transientSize = desc.transientBufferSize;
-                transientCpu.Resize(transientSize);
                 glGenBuffers(1, &transientId);
                 glBindBuffer(GL_UNIFORM_BUFFER, transientId);
-                glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(transientSize), nullptr, GL_STREAM_DRAW);
+                if (caps.persistentMapping && api.BufferStorage && api.MapBufferRange && api.FenceSync && api.ClientWaitSync)
+                {
+                    GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+                    glBufferStorage(GL_UNIFORM_BUFFER, GLsizeiptr(transientSize), nullptr, flags);
+                    transientMapped = static_cast<u8*>(glMapBufferRange(GL_UNIFORM_BUFFER, 0, GLsizeiptr(transientSize), flags));
+                    if (!transientMapped)
+                    {
+                        glDeleteBuffers(1, &transientId);
+                        glGenBuffers(1, &transientId);
+                        glBindBuffer(GL_UNIFORM_BUFFER, transientId);
+                    }
+                }
+                if (!transientMapped)
+                {
+                    transientCpu.Resize(transientSize);
+                    glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(transientSize), nullptr, GL_STREAM_DRAW);
+                }
                 transient = buffers.Add(Buffer{transientId, BufferDesc{transientSize, BufferUniform, MemoryType::Upload}});
                 HX_LOG_INFO(GLLog, "{} {}.{} on {}", es ? (web ? "WebGL" : "OpenGL ES") : "OpenGL", major, minor, caps.renderer);
                 return glGetError() == GL_NO_ERROR || true;
@@ -289,6 +315,13 @@ namespace helix::rhi
                     DestroyGLContext(context);
                     context = nullptr;
                     return;
+                }
+                for (const TransientFence& f : transientFences)
+                    glDeleteSync(f.sync);
+                if (transientMapped)
+                {
+                    glBindBuffer(GL_UNIFORM_BUFFER, transientId);
+                    glUnmapBuffer(GL_UNIFORM_BUFFER);
                 }
                 buffers.ForEach([](Buffer& b) {
                     if (!b.inHeap)
@@ -666,6 +699,19 @@ namespace helix::rhi
             TransientAllocation AllocateTransient(u32 size) override
             {
                 u32 aligned = u32(AlignUp(size, caps.uniformBufferAlignment));
+                if (transientMapped)
+                {
+                    if (transientHead + aligned > transientSize)
+                    {
+                        transientHead = 0;
+                        transientWrapped = true;
+                    }
+                    WaitTransient(transientHead, transientHead + aligned);
+                    TransientAllocation a{transient, transientHead, size, transientMapped + transientHead};
+                    transientHead += aligned;
+                    transientPending = true;
+                    return a;
+                }
                 if (transientHead + aligned > transientSize)
                 {
                     UploadTransient();
@@ -677,9 +723,45 @@ namespace helix::rhi
                 return a;
             }
 
+            static bool Overlaps(u32 a0, u32 a1, u32 b0, u32 b1) { return a0 < b1 && b0 < a1; }
+
+            // Waits for the oldest submissions until none of them still reads [begin, end).
+            void WaitTransient(u32 begin, u32 end)
+            {
+                i32 last = -1;
+                for (usize i = 0; i < transientFences.Size(); i++)
+                {
+                    const TransientFence& f = transientFences[i];
+                    bool hit = f.begin < f.end ? Overlaps(begin, end, f.begin, f.end)
+                                               : Overlaps(begin, end, f.begin, transientSize) || Overlaps(begin, end, 0, f.end);
+                    if (hit)
+                        last = i32(i);
+                }
+                if (last < 0)
+                    return;
+                while (glClientWaitSync(transientFences[usize(last)].sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull) == GL_TIMEOUT_EXPIRED)
+                {
+                }
+                for (i32 i = 0; i <= last; i++)
+                    glDeleteSync(transientFences[usize(i)].sync);
+                for (i32 i = 0; i <= last; i++)
+                    transientFences.RemoveAt(0);
+            }
+
+            void FenceTransient()
+            {
+                if (!transientMapped || !transientPending)
+                    return;
+                u32 begin = transientWrapped && transientHead >= transientFenced ? 0 : transientFenced;
+                u32 end = transientWrapped && transientHead >= transientFenced ? transientSize : transientHead;
+                transientFences.Push({glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), begin, end});
+                transientFenced = transientHead;
+                transientPending = transientWrapped = false;
+            }
+
             void UploadTransient()
             {
-                if (transientHead == transientUploaded)
+                if (transientMapped || transientHead == transientUploaded)
                     return;
                 glBindBuffer(GL_UNIFORM_BUFFER, transientId);
                 if (transientOrphan)
@@ -1173,6 +1255,7 @@ namespace helix::rhi
                         break;
                     }
                 });
+                FenceTransient();
             }
 
             bool ReadTexture(TextureHandle handle, u32 mip, void* out, usize size) override

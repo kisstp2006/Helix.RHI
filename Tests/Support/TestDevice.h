@@ -71,7 +71,7 @@ namespace helix::rhi::testing
     }
 
     template <typename F>
-    void ForEachBackend(F&& f)
+    void ForEachBackend(F&& f, u32 transientBufferSize = 8u << 20)
     {
         Backend list[] = {Backend::D3D11, Backend::OpenGL, Backend::WebGL2};
         for (Backend b : list)
@@ -86,7 +86,7 @@ namespace helix::rhi::testing
                 adapters++;
             for (i32 adapter = adapters ? 0 : -1; adapter < i32(adapters); adapter++)
             {
-                Device* device = Device::Create({.backend = b, .adapter = adapter, .vsync = false});
+                Device* device = Device::Create({.backend = b, .adapter = adapter, .vsync = false, .transientBufferSize = transientBufferSize});
                 if (!device)
                 {
                     std::printf("    %s: device creation failed, skipped\n", BackendName(b));
