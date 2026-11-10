@@ -1200,6 +1200,106 @@ namespace helix::rhi::testing
         kGradientComputeDxbc, sizeof(kGradientComputeDxbc), nullptr, 0,
     };
 
+    inline const unsigned char kLoadTexelsComputeDxbc[] = {
+        68,88,66,67,242,166,196,168,107,192,169,194,126,65,166,169,7,70,222,123,1,0,0,0,120,2,0,0,3,0,0,0,
+        44,0,0,0,60,0,0,0,76,0,0,0,73,83,71,78,8,0,0,0,0,0,0,0,8,0,0,0,79,83,71,78,
+        8,0,0,0,0,0,0,0,8,0,0,0,83,72,69,88,36,2,0,0,80,0,5,0,137,0,0,0,89,0,0,4,
+        70,142,32,0,0,0,0,0,1,0,0,0,90,0,0,3,0,96,16,0,0,0,0,0,88,24,0,4,0,112,16,0,
+        0,0,0,0,85,85,0,0,157,0,0,3,0,224,17,0,0,0,0,0,95,0,0,2,114,0,2,0,104,0,0,2,
+        11,0,0,0,155,0,0,4,8,0,0,0,8,0,0,0,1,0,0,0,54,0,0,4,114,0,16,0,0,0,0,0,
+        70,2,2,0,80,0,0,8,18,0,16,0,1,0,0,0,6,0,16,0,0,0,0,0,6,128,32,0,0,0,0,0,
+        0,0,0,0,80,0,0,8,18,0,16,0,2,0,0,0,86,5,16,0,0,0,0,0,86,133,32,0,0,0,0,0,
+        0,0,0,0,60,0,0,7,18,0,16,0,3,0,0,0,6,0,16,0,1,0,0,0,6,0,16,0,2,0,0,0,
+        59,0,0,5,18,0,16,0,4,0,0,0,6,0,16,0,3,0,0,0,31,0,4,3,10,0,16,0,4,0,0,0,
+        54,0,0,5,18,0,16,0,5,0,0,0,6,0,16,0,0,0,0,0,54,0,0,5,34,0,16,0,5,0,0,0,
+        86,5,16,0,0,0,0,0,54,0,0,8,242,0,16,0,6,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,
+        0,0,0,0,0,0,0,0,54,0,0,5,50,0,16,0,6,0,0,0,70,0,16,0,5,0,0,0,54,0,0,8,
+        130,0,16,0,6,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,45,0,0,7,
+        242,0,16,0,7,0,0,0,70,14,16,0,6,0,0,0,70,126,16,0,0,0,0,0,38,0,0,9,0,208,0,0,
+        18,0,16,0,8,0,0,0,86,5,16,0,0,0,0,0,6,128,32,0,0,0,0,0,0,0,0,0,30,0,0,7,
+        18,0,16,0,9,0,0,0,6,0,16,0,8,0,0,0,6,0,16,0,0,0,0,0,35,0,0,15,18,0,16,0,
+        10,0,0,0,6,0,16,0,9,0,0,0,2,64,0,0,16,0,0,0,16,0,0,0,16,0,0,0,16,0,0,0,
+        2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,166,0,0,7,242,224,17,0,0,0,0,0,
+        10,0,16,0,10,0,0,0,70,14,16,0,7,0,0,0,21,0,0,1,62,0,0,1,
+    };
+    inline const ShaderBinding kLoadTexelsComputeBindings[] = {{"hx_block_size", BindingKind::UniformBuffer, 0}, {"g_source", BindingKind::Texture, 0}, };
+    inline const CompiledShader kLoadTexelsCompute = {
+        ShaderStage::Compute,
+        "#version 430 core\n"
+        "struct S_Size_0\n"
+        "{\n"
+        "    uint m_width;\n"
+        "    uint m_height;\n"
+        "    uint m_unused0;\n"
+        "    uint m_unused1;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_size\n"
+        "{\n"
+        "    S_Size_0 g_size;\n"
+        "};\n"
+        "layout(std430, binding = 0) buffer hx_buffer_texels\n"
+        "{\n"
+        "    vec4 g_texels[];\n"
+        "};\n"
+        "uniform sampler2D g_source;\n"
+        "\n"
+        "void f_Compute_0(in uvec3 p_id)\n"
+        "{\n"
+        "    if ((!((p_id.x >= g_size.m_width) || (p_id.y >= g_size.m_height))))\n"
+        "    {\n"
+        "        g_texels[int(((p_id.y * g_size.m_width) + p_id.x))] = texelFetch(g_source, ivec2(int(p_id.x), int(p_id.y)), 0);\n"
+        "    }\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+        "\n"
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    f_Compute_0(uvec3(gl_GlobalInvocationID));\n"
+        "}\n"
+        "",
+        "#version 310 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "struct S_Size_0\n"
+        "{\n"
+        "    uint m_width;\n"
+        "    uint m_height;\n"
+        "    uint m_unused0;\n"
+        "    uint m_unused1;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_size\n"
+        "{\n"
+        "    S_Size_0 g_size;\n"
+        "};\n"
+        "layout(std430, binding = 0) buffer hx_buffer_texels\n"
+        "{\n"
+        "    vec4 g_texels[];\n"
+        "};\n"
+        "uniform sampler2D g_source;\n"
+        "\n"
+        "void f_Compute_0(in uvec3 p_id)\n"
+        "{\n"
+        "    if ((!((p_id.x >= g_size.m_width) || (p_id.y >= g_size.m_height))))\n"
+        "    {\n"
+        "        g_texels[int(((p_id.y * g_size.m_width) + p_id.x))] = texelFetch(g_source, ivec2(int(p_id.x), int(p_id.y)), 0);\n"
+        "    }\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+        "\n"
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    f_Compute_0(uvec3(gl_GlobalInvocationID));\n"
+        "}\n"
+        "",
+        kLoadTexelsComputeDxbc, sizeof(kLoadTexelsComputeDxbc), kLoadTexelsComputeBindings, 2,
+    };
+
     inline const unsigned char kCullComputeDxbc[] = {
         68,88,66,67,223,112,154,188,117,42,231,109,12,44,175,161,164,168,121,142,1,0,0,0,40,6,0,0,3,0,0,0,
         44,0,0,0,60,0,0,0,76,0,0,0,73,83,71,78,8,0,0,0,0,0,0,0,8,0,0,0,79,83,71,78,

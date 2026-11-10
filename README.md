@@ -80,6 +80,15 @@ recorded on the profiler track `GPU`. Available on D3D11, OpenGL 3.3+ and OpenGL
 | OpenGL ES | Android, Linux | EGL, 3.0 to 3.2 |
 | WebGL 2 | Web | Canvas selected by the window handle |
 
+## Block compressed textures
+
+BC1 to BC7 (BC4 and BC5 also signed, BC6H unsigned and signed), ETC2 RGB / RGBA1 / RGBA, EAC R11 / RG11 (also signed) and
+ASTC LDR 4x4 to 12x12 are formats of `TextureDesc`; their `initialData` is whole blocks of the first mip, one image per
+layer or face. `FormatBlock`, `FormatImageBytes` and `FormatRowBytes` give the block size and the bytes.
+`DeviceCaps::textureCompressionBC` (BC1 to BC3), `textureCompressionRGTC` (BC4, BC5), `textureCompressionBPTC` (BC6H, BC7),
+`textureCompressionETC2` (ETC2 and EAC, core in OpenGL 4.3 and ES 3.0) and `textureCompressionASTC` say what a device
+offers; D3D11 has the BC formats only.
+
 ## Example
 
 ```cpp
@@ -104,7 +113,7 @@ the tests use.
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
-textures, a GPU driven indirect draw, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
+textures, a GPU driven indirect draw, every block format a device offers decoded by the GPU against the Helix.Image decoders, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
 The shaders of the tests and the example are in `Tests/Support/CompiledShaders.h`: GLSL, GLSL ES and Direct3D bytecode
 generated from C# sources by Helix.ShaderCompiler (its `export_rhi_shaders` target; the sources are in its
 `Tests/Shaders/Rhi`). This library sits below that compiler, so the generated file is checked in. No shader is written

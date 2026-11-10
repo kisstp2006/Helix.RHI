@@ -48,6 +48,12 @@ namespace helix::rhi
             case Format::BC3Unorm: return DXGI_FORMAT_BC3_UNORM;
             case Format::BC5Unorm: return DXGI_FORMAT_BC5_UNORM;
             case Format::BC7Unorm: return DXGI_FORMAT_BC7_UNORM;
+            case Format::BC2Unorm: return DXGI_FORMAT_BC2_UNORM;
+            case Format::BC4Unorm: return DXGI_FORMAT_BC4_UNORM;
+            case Format::BC4Snorm: return DXGI_FORMAT_BC4_SNORM;
+            case Format::BC5Snorm: return DXGI_FORMAT_BC5_SNORM;
+            case Format::BC6HUfloat: return DXGI_FORMAT_BC6H_UF16;
+            case Format::BC6HSfloat: return DXGI_FORMAT_BC6H_SF16;
             default: return DXGI_FORMAT_UNKNOWN;
             }
         }
@@ -313,6 +319,8 @@ namespace helix::rhi
                 caps.baseInstance = true;
                 caps.clipControl = true;
                 caps.textureCompressionBC = true;
+                caps.textureCompressionRGTC = true;
+                caps.textureCompressionBPTC = level >= D3D_FEATURE_LEVEL_11_0;
                 caps.maxTextureSize = level >= D3D_FEATURE_LEVEL_11_0 ? 16384 : 8192;
                 D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
                 if (Succeeded(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))))
@@ -706,11 +714,11 @@ namespace helix::rhi
                 UINT bind = (desc.usage & TextureSampled ? D3D11_BIND_SHADER_RESOURCE : 0) | (desc.usage & TextureRenderTarget ? D3D11_BIND_RENDER_TARGET : 0) |
                             (desc.usage & TextureDepthStencil ? D3D11_BIND_DEPTH_STENCIL : 0) | (desc.usage & TextureStorage ? D3D11_BIND_UNORDERED_ACCESS : 0);
                 // Initial data is one image per layer (per face of a cube, one block for a volume), each rows top first.
-                u32 bpp = FormatBytesPerPixel(desc.format);
+                u32 rowBytes = FormatRowBytes(desc.format, desc.width), imageBytes = u32(FormatImageBytes(desc.format, desc.width, desc.height));
                 u32 layers = desc.type == TextureType::TextureCube ? 6u : desc.type == TextureType::Texture3D ? 1u : Max(desc.depthOrLayers, 1u);
                 Array<D3D11_SUBRESOURCE_DATA> init;
                 for (u32 i = 0; i < layers; i++)
-                    init.Push({static_cast<const u8*>(desc.initialData) + usize(i) * desc.width * desc.height * bpp, desc.width * bpp, desc.width * desc.height * bpp});
+                    init.Push({static_cast<const u8*>(desc.initialData) + usize(i) * imageBytes, rowBytes, imageBytes});
                 if (desc.type == TextureType::Texture3D)
                 {
                     D3D11_TEXTURE3D_DESC td{desc.width, desc.height, desc.depthOrLayers, desc.mipLevels, resourceFormat, D3D11_USAGE_DEFAULT, bind, 0, 0};

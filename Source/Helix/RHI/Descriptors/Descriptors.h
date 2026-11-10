@@ -58,12 +58,50 @@ namespace helix::rhi
         BC3Unorm,
         BC5Unorm,
         BC7Unorm,
+        BC2Unorm,
+        BC4Unorm,
+        BC4Snorm,
+        BC5Snorm,
+        BC6HUfloat,
+        BC6HSfloat,
+        ETC2RGB8,
+        ETC2RGB8A1,
+        ETC2RGBA8,
+        EACR11,
+        EACR11Snorm,
+        EACRG11,
+        EACRG11Snorm,
+        ASTC4x4,
+        ASTC5x4,
+        ASTC5x5,
+        ASTC6x5,
+        ASTC6x6,
+        ASTC8x5,
+        ASTC8x6,
+        ASTC8x8,
+        ASTC10x5,
+        ASTC10x6,
+        ASTC10x8,
+        ASTC10x10,
+        ASTC12x10,
+        ASTC12x12,
         Count,
     };
 
     bool IsDepthFormat(Format format);
     bool IsCompressedFormat(Format format);
     u32 FormatBytesPerPixel(Format format);
+
+    // Texels per block and bytes per block; uncompressed formats are 1 x 1 blocks of one texel.
+    struct FormatBlockInfo
+    {
+        u32 width = 1, height = 1, bytes = 0;
+    };
+    FormatBlockInfo FormatBlock(Format format);
+    // Bytes of one 2D image of the format, whole blocks for compressed formats.
+    u64 FormatImageBytes(Format format, u32 width, u32 height);
+    // Bytes of a row of blocks (of texels for uncompressed formats).
+    u32 FormatRowBytes(Format format, u32 width);
 
     enum BufferUsage : u32
     {
@@ -420,7 +458,11 @@ namespace helix::rhi
         bool uniformBufferOffsets = false;
         bool persistentMapping = false;
         bool clipControl = false;
+        // BC1 to BC3; BC4 and BC5 (RGTC); BC6H and BC7 (BPTC).
         bool textureCompressionBC = false;
+        bool textureCompressionRGTC = false;
+        bool textureCompressionBPTC = false;
+        // ETC2 and EAC.
         bool textureCompressionETC2 = false;
         bool textureCompressionASTC = false;
         u32 uniformBufferAlignment = 256;

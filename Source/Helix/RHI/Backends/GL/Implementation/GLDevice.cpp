@@ -92,6 +92,33 @@ namespace helix::rhi
             case Format::BC3Unorm: return {GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 0, 0, true};
             case Format::BC5Unorm: return {GL_COMPRESSED_RG_RGTC2, 0, 0, true};
             case Format::BC7Unorm: return {GL_COMPRESSED_RGBA_BPTC_UNORM, 0, 0, true};
+            case Format::BC2Unorm: return {GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, 0, 0, true};
+            case Format::BC4Unorm: return {GL_COMPRESSED_RED_RGTC1, 0, 0, true};
+            case Format::BC4Snorm: return {GL_COMPRESSED_SIGNED_RED_RGTC1, 0, 0, true};
+            case Format::BC5Snorm: return {GL_COMPRESSED_SIGNED_RG_RGTC2, 0, 0, true};
+            case Format::BC6HUfloat: return {GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT, 0, 0, true};
+            case Format::BC6HSfloat: return {GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT, 0, 0, true};
+            case Format::ETC2RGB8: return {GL_COMPRESSED_RGB8_ETC2, 0, 0, true};
+            case Format::ETC2RGB8A1: return {GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2, 0, 0, true};
+            case Format::ETC2RGBA8: return {GL_COMPRESSED_RGBA8_ETC2_EAC, 0, 0, true};
+            case Format::EACR11: return {GL_COMPRESSED_R11_EAC, 0, 0, true};
+            case Format::EACR11Snorm: return {GL_COMPRESSED_SIGNED_R11_EAC, 0, 0, true};
+            case Format::EACRG11: return {GL_COMPRESSED_RG11_EAC, 0, 0, true};
+            case Format::EACRG11Snorm: return {GL_COMPRESSED_SIGNED_RG11_EAC, 0, 0, true};
+            case Format::ASTC4x4: return {GL_COMPRESSED_RGBA_ASTC_4x4, 0, 0, true};
+            case Format::ASTC5x4: return {GL_COMPRESSED_RGBA_ASTC_5x4, 0, 0, true};
+            case Format::ASTC5x5: return {GL_COMPRESSED_RGBA_ASTC_5x5, 0, 0, true};
+            case Format::ASTC6x5: return {GL_COMPRESSED_RGBA_ASTC_6x5, 0, 0, true};
+            case Format::ASTC6x6: return {GL_COMPRESSED_RGBA_ASTC_6x6, 0, 0, true};
+            case Format::ASTC8x5: return {GL_COMPRESSED_RGBA_ASTC_8x5, 0, 0, true};
+            case Format::ASTC8x6: return {GL_COMPRESSED_RGBA_ASTC_8x6, 0, 0, true};
+            case Format::ASTC8x8: return {GL_COMPRESSED_RGBA_ASTC_8x8, 0, 0, true};
+            case Format::ASTC10x5: return {GL_COMPRESSED_RGBA_ASTC_10x5, 0, 0, true};
+            case Format::ASTC10x6: return {GL_COMPRESSED_RGBA_ASTC_10x6, 0, 0, true};
+            case Format::ASTC10x8: return {GL_COMPRESSED_RGBA_ASTC_10x8, 0, 0, true};
+            case Format::ASTC10x10: return {GL_COMPRESSED_RGBA_ASTC_10x10, 0, 0, true};
+            case Format::ASTC12x10: return {GL_COMPRESSED_RGBA_ASTC_12x10, 0, 0, true};
+            case Format::ASTC12x12: return {GL_COMPRESSED_RGBA_ASTC_12x12, 0, 0, true};
             default: return {0, 0, 0, false};
             }
         }
@@ -308,7 +335,10 @@ namespace helix::rhi
                 caps.persistentMapping = !es && (at(4, 4) || HasExtension("GL_ARB_buffer_storage"));
                 caps.clipControl = api.ClipControl != nullptr && (at(4, 5) || HasExtension("GL_ARB_clip_control") || HasExtension("GL_EXT_clip_control"));
                 caps.textureCompressionBC = HasExtension("GL_EXT_texture_compression_s3tc") || HasExtension("WEBGL_compressed_texture_s3tc");
-                caps.textureCompressionETC2 = es;
+                caps.textureCompressionRGTC = (!es && at(3, 0)) || HasExtension("GL_ARB_texture_compression_rgtc") || HasExtension("GL_EXT_texture_compression_rgtc");
+                caps.textureCompressionBPTC = (!es && at(4, 2)) || HasExtension("GL_ARB_texture_compression_bptc") || HasExtension("GL_EXT_texture_compression_bptc");
+                // ETC2 and EAC are core in OpenGL ES 3.0 and OpenGL 4.3.
+                caps.textureCompressionETC2 = es || at(4, 3) || HasExtension("GL_ARB_ES3_compatibility");
                 caps.textureCompressionASTC = HasExtension("GL_KHR_texture_compression_astc_ldr");
                 GLint alignment = 256, maxSize = 4096;
                 glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
@@ -497,6 +527,21 @@ namespace helix::rhi
                 else
                     glTexStorage3D(t.target, mips, f.internal, GLsizei(desc.width), GLsizei(desc.height), GLsizei(desc.depthOrLayers));
                 glTexParameteri(t.target, GL_TEXTURE_MAX_LEVEL, mips - 1);
+                if (desc.initialData && f.compressed)
+                {
+                    // Whole blocks of the first mip, one image per face or layer.
+                    GLsizei bytes = GLsizei(FormatImageBytes(desc.format, desc.width, desc.height));
+                    const u8* data = static_cast<const u8*>(desc.initialData);
+                    if (t.target == GL_TEXTURE_2D)
+                        glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GLsizei(desc.width), GLsizei(desc.height), f.internal, bytes, data);
+                    else if (t.target == GL_TEXTURE_CUBE_MAP)
+                        for (u32 i = 0; i < 6; i++)
+                            glCompressedTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, 0, 0, GLsizei(desc.width), GLsizei(desc.height), f.internal, bytes,
+                                                      data + usize(bytes) * i);
+                    else
+                        glCompressedTexSubImage3D(t.target, 0, 0, 0, 0, GLsizei(desc.width), GLsizei(desc.height), GLsizei(desc.depthOrLayers), f.internal,
+                                                  bytes * GLsizei(desc.depthOrLayers), data);
+                }
                 if (desc.initialData && !f.compressed)
                 {
                     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
