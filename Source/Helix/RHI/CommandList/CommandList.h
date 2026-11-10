@@ -273,11 +273,10 @@ namespace helix::rhi
     private:
         u8* Header(CommandType type, u32 size)
         {
-            usize at = bytes_.Size();
-            bytes_.Resize(at + sizeof(CommandHeader) + size);
+            u8* p = bytes_.AppendUninitialized(sizeof(CommandHeader) + size);
             CommandHeader h{type, 0, u16(size)};
-            std::memcpy(bytes_.Data() + at, &h, sizeof(h));
-            return bytes_.Data() + at + sizeof(h);
+            std::memcpy(p, &h, sizeof(h));
+            return p + sizeof(h);
         }
 
         template <typename T>

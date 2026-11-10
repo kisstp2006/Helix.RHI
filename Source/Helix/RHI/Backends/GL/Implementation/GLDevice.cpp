@@ -703,10 +703,14 @@ namespace helix::rhi
                 {
                     if (transientHead + aligned > transientSize)
                     {
+                        // The skipped tail is given up too, so the remaining fences stay ordered from the ring start.
+                        WaitTransient(transientHead, transientSize);
                         transientHead = 0;
                         transientWrapped = true;
                     }
-                    WaitTransient(transientHead, transientHead + aligned);
+                    // Fences are ordered along the ring, so only the oldest one can lie directly ahead.
+                    while (!transientFences.Empty() && HitsFence(transientFences[0], transientHead, transientHead + aligned))
+                        WaitTransient(transientHead, transientHead + aligned);
                     TransientAllocation a{transient, transientHead, size, transientMapped + transientHead};
                     transientHead += aligned;
                     transientPending = true;
@@ -725,16 +729,19 @@ namespace helix::rhi
 
             static bool Overlaps(u32 a0, u32 a1, u32 b0, u32 b1) { return a0 < b1 && b0 < a1; }
 
+            bool HitsFence(const TransientFence& f, u32 begin, u32 end) const
+            {
+                return f.begin < f.end ? Overlaps(begin, end, f.begin, f.end)
+                                       : Overlaps(begin, end, f.begin, transientSize) || Overlaps(begin, end, 0, f.end);
+            }
+
             // Waits for the oldest submissions until none of them still reads [begin, end).
             void WaitTransient(u32 begin, u32 end)
             {
                 i32 last = -1;
                 for (usize i = 0; i < transientFences.Size(); i++)
                 {
-                    const TransientFence& f = transientFences[i];
-                    bool hit = f.begin < f.end ? Overlaps(begin, end, f.begin, f.end)
-                                               : Overlaps(begin, end, f.begin, transientSize) || Overlaps(begin, end, 0, f.end);
-                    if (hit)
+                    if (HitsFence(transientFences[i], begin, end))
                         last = i32(i);
                 }
                 if (last < 0)
