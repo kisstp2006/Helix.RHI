@@ -21,16 +21,19 @@ namespace helix::rhi
         case Format::RG16Float:
         case Format::R32Float:
         case Format::R32Uint:
+        case Format::R32Sint:
         case Format::RGB10A2Unorm:
         case Format::RG11B10Float:
         case Format::D24UnormS8Uint:
         case Format::D32Float: return 4;
         case Format::RGBA16Float:
         case Format::RG32Float:
-        case Format::RG32Uint: return 8;
+        case Format::RG32Uint:
+        case Format::RG32Sint: return 8;
         case Format::RGB32Float: return 12;
         case Format::RGBA32Float:
-        case Format::RGBA32Uint: return 16;
+        case Format::RGBA32Uint:
+        case Format::RGBA32Sint: return 16;
         default: return 0;
         }
     }

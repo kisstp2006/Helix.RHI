@@ -91,6 +91,29 @@ HX_TEST(RHI, CullingMatchesAcrossBackends)
     });
 }
 
+// Integer textures keep their bits from upload to readback.
+HX_TEST(RHI, IntegerFormatsRoundTrip)
+{
+    ForEachBackend([](Device& d) {
+        const rhi::Format formats[] = {rhi::Format::R32Uint,  rhi::Format::RG32Uint, rhi::Format::RGBA32Uint,
+                                       rhi::Format::R32Sint,  rhi::Format::RG32Sint, rhi::Format::RGBA32Sint};
+        for (rhi::Format format : formats)
+        {
+            u32 words = FormatBytesPerPixel(format) / 4;
+            Array<u32> texels;
+            for (u32 i = 0; i < 4 * 4 * words; i++)
+                texels.Push(i * 2654435761u);
+            TextureHandle t = d.CreateTexture({.format = format, .width = 4, .height = 4, .initialData = texels.Data()});
+            HX_REQUIRE(t.IsValid());
+            Array<u32> back;
+            back.Resize(texels.Size(), 0u);
+            HX_REQUIRE(d.ReadTexture(t, 0, back.Data(), back.Size() * 4));
+            HX_CHECK(std::memcmp(back.Data(), texels.Data(), texels.Size() * 4) == 0);
+            d.Destroy(t);
+        }
+    });
+}
+
 HX_TEST(RHI, UniformsFromTransientMemory)
 {
     ForEachBackend([&](Device& d) {

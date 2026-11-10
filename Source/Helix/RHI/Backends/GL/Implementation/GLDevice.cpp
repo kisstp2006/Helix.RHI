@@ -49,6 +49,9 @@ namespace helix::rhi
             case Format::R32Uint: return {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, false};
             case Format::RG32Uint: return {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, false};
             case Format::RGBA32Uint: return {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT, false};
+            case Format::R32Sint: return {GL_R32I, GL_RED_INTEGER, GL_INT, false};
+            case Format::RG32Sint: return {GL_RG32I, GL_RG_INTEGER, GL_INT, false};
+            case Format::RGBA32Sint: return {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT, false};
             case Format::RGB10A2Unorm: return {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, false};
             case Format::RG11B10Float: return {GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV, false};
             case Format::D16Unorm: return {GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT, false};

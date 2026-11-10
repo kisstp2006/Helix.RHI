@@ -36,6 +36,9 @@ namespace helix::rhi
             case Format::R32Uint: return DXGI_FORMAT_R32_UINT;
             case Format::RG32Uint: return DXGI_FORMAT_R32G32_UINT;
             case Format::RGBA32Uint: return DXGI_FORMAT_R32G32B32A32_UINT;
+            case Format::R32Sint: return DXGI_FORMAT_R32_SINT;
+            case Format::RG32Sint: return DXGI_FORMAT_R32G32_SINT;
+            case Format::RGBA32Sint: return DXGI_FORMAT_R32G32B32A32_SINT;
             case Format::RGB10A2Unorm: return DXGI_FORMAT_R10G10B10A2_UNORM;
             case Format::RG11B10Float: return DXGI_FORMAT_R11G11B10_FLOAT;
             case Format::D16Unorm: return DXGI_FORMAT_D16_UNORM;
