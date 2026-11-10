@@ -13,8 +13,7 @@
 
 namespace helix::rhi::testing
 {
-    // Hand written test shaders for what the shader compiler of the engine does not cover yet (compute, storage and
-    // bindless resources): HLSL for D3D11, compiled by the operating system compiler in tests only, and GLSL for the GL
+    // Hand written test shaders for what the shader compiler of the engine does not cover yet (bindless resources): HLSL for D3D11, compiled by the operating system compiler in tests only, and GLSL for the GL
     // family. Every other test shader is in CompiledShaders.h.
     struct ShaderPair
     {
