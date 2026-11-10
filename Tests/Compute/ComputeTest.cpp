@@ -1,3 +1,4 @@
+#include <Support/CompiledShaders.h>
 #include <Support/TestDevice.h>
 
 #include <Helix/Testing/Test.h>
@@ -117,18 +118,12 @@ HX_TEST(Compute, GpuDrivenIndirectDraw)
                        " float x0 = float(q) * 0.5 - 1.0, x1 = x0 + 0.5;"
                        " vec2 v[6] = vec2[6](vec2(x0, -1.0), vec2(x1, -1.0), vec2(x0, 1.0), vec2(x1, -1.0), vec2(x1, 1.0), vec2(x0, 1.0));"
                        " for (uint i = 0u; i < 6u; i++) verts[base + i] = v[i]; }";
-    const ShaderPair draw = {
-        "float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(p, 0.5, 1); }",
-        "float4 main() : SV_Target { return float4(0, 1, 0, 1); }",
-        "layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p, 0.5, 1.0); }",
-        "out vec4 o; void main() { o = vec4(0.0, 1.0, 0.0, 1.0); }",
-    };
     ForEachBackend([&](Device& d) {
         if (SkipWithoutCompute(d) || !d.Caps().drawIndirect)
             return;
         ShaderHandle cs = MakeComputeShader(d, hlsl, glsl);
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, draw);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, draw);
+        ShaderHandle vs = MakeShader(d, kPlainVertex);
+        ShaderHandle fs = MakeShader(d, kGreenFragment);
         HX_REQUIRE(cs.IsValid() && vs.IsValid() && fs.IsValid());
         PipelineHandle cull = d.CreateComputePipeline({cs, "cull"});
         PipelineDesc pd;

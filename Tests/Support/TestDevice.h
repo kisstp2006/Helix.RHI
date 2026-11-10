@@ -102,15 +102,6 @@ namespace helix::rhi::testing
         }
     }
 
-    inline const ShaderPair kColorShaders = {
-        "struct I { float2 p : TEXCOORD0; float4 c : TEXCOORD1; }; struct O { float4 p : SV_Position; float4 c : TEXCOORD0; };"
-        "O main(I i) { O o; o.p = float4(i.p, 0.5, 1); o.c = i.c; return o; }",
-        "float4 main(float4 p : SV_Position, float4 c : TEXCOORD0) : SV_Target { return c; }",
-        "layout(location = 0) in vec2 p; layout(location = 1) in vec4 c; out vec4 vc;"
-        "void main() { gl_Position = vec4(p, 0.5, 1.0); vc = c; }",
-        "in vec4 vc; out vec4 o; void main() { o = vc; }",
-    };
-
     inline PipelineDesc ColorPipeline(ShaderHandle vs, ShaderHandle fs)
     {
         PipelineDesc p;

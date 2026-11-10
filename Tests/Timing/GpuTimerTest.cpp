@@ -1,3 +1,4 @@
+#include <Support/CompiledShaders.h>
 #include <Support/TestDevice.h>
 
 #include <Helix/Core/Types/Guid.h>
@@ -17,8 +18,8 @@ HX_TEST(GpuTimers, NestedScopesAndProfilerTrack)
             std::printf("    %s: no GPU timers, skipped\n", d.Caps().renderer);
             return;
         }
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, kColorShaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, kColorShaders);
+        ShaderHandle vs = MakeShader(d, kColorVertex);
+        ShaderHandle fs = MakeShader(d, kColorFragment);
         PipelineHandle pipe = d.CreatePipeline(ColorPipeline(vs, fs));
         HX_REQUIRE(pipe.IsValid());
         const f32 tri[] = {-1, -1, 1, 0, 0, 1, 3, -1, 1, 0, 0, 1, -1, 3, 1, 0, 0, 1};

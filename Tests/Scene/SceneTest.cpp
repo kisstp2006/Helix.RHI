@@ -1,3 +1,4 @@
+#include <Support/CompiledShaders.h>
 #include <Support/TestDevice.h>
 
 #include <Helix/Testing/Test.h>
@@ -10,21 +11,9 @@ using namespace helix::rhi::testing;
 // compared with the same golden image on every backend and GPU.
 HX_TEST(Scene, MixedPassMatchesGolden)
 {
-    const ShaderPair shaders = {
-        "struct I { float3 p : TEXCOORD0; float4 c : TEXCOORD1; float2 uv : TEXCOORD2; };"
-        "struct O { float4 p : SV_Position; float4 c : TEXCOORD0; float2 uv : TEXCOORD1; };"
-        "O main(I i) { O o; o.p = float4(i.p, 1); o.c = i.c; o.uv = i.uv; return o; }",
-        "cbuffer M : register(b0) { uint mode; uint3 pad; }; Texture2D T : register(t0); SamplerState S : register(s0);"
-        "float4 main(float4 p : SV_Position, float4 c : TEXCOORD0, float2 uv : TEXCOORD1) : SV_Target { return mode == 0 ? c : T.Sample(S, uv) * c; }",
-        "layout(location = 0) in vec3 p; layout(location = 1) in vec4 c; layout(location = 2) in vec2 uv; out vec4 vc; out vec2 vuv;"
-        "void main() { gl_Position = vec4(p, 1.0); vc = c; vuv = uv; }",
-        "layout(std140) uniform M { uint mode; }; uniform sampler2D T; in vec4 vc; in vec2 vuv; out vec4 o;"
-        "void main() { o = mode == 0u ? vc : texture(T, vuv) * vc; }",
-    };
-    const ShaderBinding bindings[] = {{"M", BindingKind::UniformBuffer, 0}, {"T", BindingKind::Texture, 0}};
     ForEachBackend([&](Device& d) {
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 2);
+        ShaderHandle vs = MakeShader(d, kSceneVertex);
+        ShaderHandle fs = MakeShader(d, kSceneFragment);
         HX_REQUIRE(vs.IsValid() && fs.IsValid());
         PipelineDesc pd;
         pd.vertexShader = vs;

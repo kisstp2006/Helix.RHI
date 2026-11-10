@@ -1,3 +1,4 @@
+#include <Support/CompiledShaders.h>
 #include <Support/TestDevice.h>
 
 #include <Helix/Platform/Time/Time.h>
@@ -25,8 +26,8 @@ HX_TEST(RHI, ClearAndReadBack)
 HX_TEST(RHI, TriangleOrientationMatchesAcrossBackends)
 {
     ForEachBackend([](Device& d) {
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, kColorShaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, kColorShaders);
+        ShaderHandle vs = MakeShader(d, kColorVertex);
+        ShaderHandle fs = MakeShader(d, kColorFragment);
         HX_REQUIRE(vs.IsValid() && fs.IsValid());
         PipelineHandle pipe = d.CreatePipeline(ColorPipeline(vs, fs));
         HX_REQUIRE(pipe.IsValid());
@@ -55,16 +56,9 @@ HX_TEST(RHI, TriangleOrientationMatchesAcrossBackends)
 
 HX_TEST(RHI, UniformsFromTransientMemory)
 {
-    const ShaderPair shaders = {
-        "float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(p, 0.5, 1); }",
-        "cbuffer Material : register(b2) { float4 tint; }; float4 main() : SV_Target { return tint; }",
-        "layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p, 0.5, 1.0); }",
-        "layout(std140) uniform Material { vec4 tint; }; out vec4 o; void main() { o = tint; }",
-    };
     ForEachBackend([&](Device& d) {
-        const ShaderBinding bindings[] = {{"Material", BindingKind::UniformBuffer, 2}};
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 1);
+        ShaderHandle vs = MakeShader(d, kPlainVertex);
+        ShaderHandle fs = MakeShader(d, kTintFragment);
         PipelineDesc pd;
         pd.vertexShader = vs;
         pd.fragmentShader = fs;
@@ -108,16 +102,9 @@ HX_TEST(RHI, UniformsFromTransientMemory)
 
 HX_TEST(RHI, TextureSamplingOrientation)
 {
-    const ShaderPair shaders = {
-        "struct O { float4 p : SV_Position; float2 uv : TEXCOORD0; }; O main(float2 p : TEXCOORD0, float2 uv : TEXCOORD1) { O o; o.p = float4(p, 0.5, 1); o.uv = uv; return o; }",
-        "Texture2D t0 : register(t3); SamplerState s0 : register(s3); float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t0.Sample(s0, uv); }",
-        "layout(location = 0) in vec2 p; layout(location = 1) in vec2 uv; out vec2 vuv; void main() { gl_Position = vec4(p, 0.5, 1.0); vuv = uv; }",
-        "uniform sampler2D t0; in vec2 vuv; out vec4 o; void main() { o = texture(t0, vuv); }",
-    };
     ForEachBackend([&](Device& d) {
-        const ShaderBinding bindings[] = {{"t0", BindingKind::Texture, 3}};
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 1);
+        ShaderHandle vs = MakeShader(d, kTexturedVertex);
+        ShaderHandle fs = MakeShader(d, kTexturedFragment);
         PipelineDesc pd;
         pd.vertexShader = vs;
         pd.fragmentShader = fs;
@@ -161,16 +148,9 @@ HX_TEST(RHI, TextureSamplingOrientation)
 
 HX_TEST(RHI, InstancedIndexedQuads)
 {
-    const ShaderPair shaders = {
-        "struct O { float4 p : SV_Position; float4 c : TEXCOORD0; }; O main(float2 p : TEXCOORD0, float2 offset : TEXCOORD1, float4 c : TEXCOORD2) { O o; o.p = float4(p * 0.5 + offset, 0.5, 1); o.c = c; return o; }",
-        "float4 main(float4 p : SV_Position, float4 c : TEXCOORD0) : SV_Target { return c; }",
-        "layout(location = 0) in vec2 p; layout(location = 1) in vec2 offset; layout(location = 2) in vec4 c; out vec4 vc;"
-        "void main() { gl_Position = vec4(p * 0.5 + offset, 0.5, 1.0); vc = c; }",
-        "in vec4 vc; out vec4 o; void main() { o = vc; }",
-    };
     ForEachBackend([&](Device& d) {
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders);
+        ShaderHandle vs = MakeShader(d, kInstancedVertex);
+        ShaderHandle fs = MakeShader(d, kColorFragment);
         PipelineDesc pd;
         pd.vertexShader = vs;
         pd.fragmentShader = fs;
@@ -222,16 +202,9 @@ HX_TEST(RHI, InstancedIndexedQuads)
 
 HX_TEST(RHI, DepthTest)
 {
-    const ShaderPair shaders = {
-        "cbuffer Draw : register(b0) { float4 color; float depth; }; float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(p, depth, 1); }",
-        "cbuffer Draw : register(b0) { float4 color; float depth; }; float4 main() : SV_Target { return color; }",
-        "layout(std140) uniform Draw { vec4 color; float depth; }; layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p, depth, 1.0); }",
-        "layout(std140) uniform Draw { vec4 color; float depth; }; out vec4 o; void main() { o = color; }",
-    };
     ForEachBackend([&](Device& d) {
-        const ShaderBinding bindings[] = {{"Draw", BindingKind::UniformBuffer, 0}};
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders, bindings, 1);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 1);
+        ShaderHandle vs = MakeShader(d, kDepthVertex);
+        ShaderHandle fs = MakeShader(d, kDepthFragment);
         PipelineDesc pd;
         pd.vertexShader = vs;
         pd.fragmentShader = fs;
@@ -279,16 +252,9 @@ HX_TEST(RHI, DepthTest)
 
 HX_TEST(RHI, TenThousandDrawsBenchmark)
 {
-    const ShaderPair shaders = {
-        "cbuffer Draw : register(b0) { float4 color; float2 offset; }; float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(p * 0.01 + offset, 0.5, 1); }",
-        "cbuffer Draw : register(b0) { float4 color; float2 offset; }; float4 main() : SV_Target { return color; }",
-        "layout(std140) uniform Draw { vec4 color; vec2 offset; }; layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p * 0.01 + offset, 0.5, 1.0); }",
-        "layout(std140) uniform Draw { vec4 color; vec2 offset; }; out vec4 o; void main() { o = color; }",
-    };
     ForEachBackend([&](Device& d) {
-        const ShaderBinding bindings[] = {{"Draw", BindingKind::UniformBuffer, 0}};
-        ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders, bindings, 1);
-        ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 1);
+        ShaderHandle vs = MakeShader(d, kPlacedVertex);
+        ShaderHandle fs = MakeShader(d, kPlacedFragment);
         PipelineDesc pd;
         pd.vertexShader = vs;
         pd.fragmentShader = fs;
@@ -384,8 +350,8 @@ HX_TEST(RHI, SwapChainPresent)
             platform::Window::Destroy(window);
             continue;
         }
-        ShaderHandle vs = MakeShader(*d, ShaderStage::Vertex, kColorShaders);
-        ShaderHandle fs = MakeShader(*d, ShaderStage::Fragment, kColorShaders);
+        ShaderHandle vs = MakeShader(*d, kColorVertex);
+        ShaderHandle fs = MakeShader(*d, kColorFragment);
         PipelineDesc pd = ColorPipeline(vs, fs);
         pd.colorFormats[0] = Format::BGRA8Unorm;
         PipelineHandle pipe = d->CreatePipeline(pd);

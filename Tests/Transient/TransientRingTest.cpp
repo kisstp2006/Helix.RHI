@@ -1,3 +1,4 @@
+#include <Support/CompiledShaders.h>
 #include <Support/TestDevice.h>
 
 #include <Helix/Testing/Test.h>
@@ -10,17 +11,10 @@ using namespace helix::rhi::testing;
 // of a region must wait for the GPU to finish the submit that read it.
 HX_TEST(Transient, RingWrapsAcrossSubmits)
 {
-    const ShaderPair shaders = {
-        "float4 main(float2 p : TEXCOORD0) : SV_Position { return float4(p, 0.5, 1); }",
-        "cbuffer C : register(b0) { float4 color; }; float4 main() : SV_Target { return color; }",
-        "layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p, 0.5, 1.0); }",
-        "layout(std140) uniform C { vec4 color; }; out vec4 o; void main() { o = color; }",
-    };
-    const ShaderBinding bindings[] = {{"C", BindingKind::UniformBuffer, 0}};
     ForEachBackend(
         [&](Device& d) {
-            ShaderHandle vs = MakeShader(d, ShaderStage::Vertex, shaders);
-            ShaderHandle fs = MakeShader(d, ShaderStage::Fragment, shaders, bindings, 1);
+            ShaderHandle vs = MakeShader(d, kPlainVertex);
+            ShaderHandle fs = MakeShader(d, kSolidFragment);
             HX_REQUIRE(vs.IsValid() && fs.IsValid());
             PipelineDesc pd;
             pd.vertexShader = vs;
