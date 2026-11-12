@@ -507,9 +507,12 @@ namespace helix::rhi
                 b.desc = desc;
                 b.desc.initialData = nullptr;
                 glGenBuffers(1, &b.id);
-                glBindBuffer(GL_COPY_WRITE_BUFFER, b.id);
+                // WebGL 2 fixes a buffer's kind at its first binding: index buffers are first bound as index buffers (the
+                // vertex array's index binding is set again before every indexed draw).
+                GLenum target = (desc.usage & BufferIndex) != 0 ? GL_ELEMENT_ARRAY_BUFFER : GL_COPY_WRITE_BUFFER;
+                glBindBuffer(target, b.id);
                 GLenum usage = desc.memory == MemoryType::Upload ? GL_DYNAMIC_DRAW : desc.memory == MemoryType::Readback ? GL_STREAM_READ : GL_STATIC_DRAW;
-                glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(desc.size), desc.initialData, usage);
+                glBufferData(target, GLsizeiptr(desc.size), desc.initialData, usage);
                 return buffers.Add(Move(b));
             }
 
