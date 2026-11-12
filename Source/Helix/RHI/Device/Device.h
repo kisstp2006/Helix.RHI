@@ -22,6 +22,8 @@ namespace helix::rhi
         platform::NativeWindowHandle window{};
         // D3D11 adapter index as listed by AdapterName; -1 lets the system choose.
         i32 adapter = -1;
+        // D3D11: the WARP software rasterizer instead of a hardware adapter.
+        bool warp = false;
         bool debug = false;
         bool vsync = true;
         // The depth buffer of the swap chain (render passes to the back buffer use it); Unknown for none. OpenGL's

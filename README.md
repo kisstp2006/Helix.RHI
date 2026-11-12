@@ -76,7 +76,7 @@ recorded on the profiler track `GPU`. Available on D3D11, OpenGL 3.3+ and OpenGL
 
 | Backend | Platforms | Context |
 |---|---|---|
-| D3D11 | Windows | FL 10_0 to 11_1, flip discard swap chain with tearing, WARP fallback |
+| D3D11 | Windows | FL 10_0 to 11_1, flip discard swap chain with tearing, WARP fallback or on request (`DeviceDesc::warp`) |
 | OpenGL | Windows, Linux | WGL or EGL, 4.6 down to 3.3 core, hidden window or pbuffer without a window |
 | OpenGL ES | Android, Linux | EGL, 3.0 to 3.2 |
 | WebGL 2 | Web | Canvas selected by the window handle |

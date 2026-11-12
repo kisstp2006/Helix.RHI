@@ -293,10 +293,10 @@ namespace helix::rhi
                 const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
                 UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | (desc.debug ? D3D11_CREATE_DEVICE_DEBUG : 0);
                 D3D_FEATURE_LEVEL level{};
-                IDXGIAdapter1* chosen = desc.adapter >= 0 ? HardwareAdapter(u32(desc.adapter)) : nullptr;
-                if (desc.adapter >= 0 && !chosen)
+                IDXGIAdapter1* chosen = desc.adapter >= 0 && !desc.warp ? HardwareAdapter(u32(desc.adapter)) : nullptr;
+                if (desc.adapter >= 0 && !desc.warp && !chosen)
                     return false;
-                D3D_DRIVER_TYPE driver = chosen ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
+                D3D_DRIVER_TYPE driver = desc.warp ? D3D_DRIVER_TYPE_WARP : chosen ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE;
                 HRESULT hr = D3D11CreateDevice(chosen, driver, nullptr, flags, levels, 4, D3D11_SDK_VERSION, &device, &level, &context);
                 if (Failed(hr) && desc.debug)
                     hr = D3D11CreateDevice(chosen, driver, nullptr, flags & ~UINT(D3D11_CREATE_DEVICE_DEBUG), levels, 4,

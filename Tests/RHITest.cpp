@@ -628,3 +628,14 @@ HX_TEST(RHI, BindlessTextures)
         d.Destroy(fs);
     });
 }
+
+HX_TEST(RHI, WarpOnRequest)
+{
+#if HX_PLATFORM_WINDOWS
+    Device* d = Device::Create({.backend = Backend::D3D11, .adapter = 0, .warp = true, .vsync = false});
+    HX_REQUIRE(d != nullptr);
+    std::printf("    %s\n", d->Caps().renderer);
+    HX_CHECK(StringView(d->Caps().renderer).Contains("Basic Render"));
+    Device::Destroy(d);
+#endif
+}
