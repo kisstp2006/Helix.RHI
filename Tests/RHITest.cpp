@@ -491,16 +491,23 @@ HX_TEST(RHI, SwapChainPresent)
             continue;
         platform::Window* window = platform::Window::Create({.title = "rhi", .width = 128, .height = 96, .visible = false});
         HX_REQUIRE(window != nullptr);
-        Device* d = Device::Create({.backend = b, .window = window->GetNativeHandle(), .adapter = c.adapter, .vsync = false});
+        Device* d = Device::Create({.backend = b, .window = window->GetNativeHandle(), .adapter = c.adapter, .vsync = false,
+                                    .swapChainDepthFormat = Format::D24UnormS8Uint});
         if (!d)
         {
             platform::Window::Destroy(window);
             continue;
         }
+        // The back buffer and its depth buffer: passes to the swap chain test depth.
+        HX_CHECK(d->Caps().swapChainFormat != Format::Unknown);
+        HX_CHECK(d->Caps().swapChainDepthFormat == Format::D24UnormS8Uint);
         ShaderHandle vs = MakeShader(*d, kColorVertex);
         ShaderHandle fs = MakeShader(*d, kColorFragment);
         PipelineDesc pd = ColorPipeline(vs, fs);
-        pd.colorFormats[0] = Format::BGRA8Unorm;
+        pd.colorFormats[0] = d->Caps().swapChainFormat;
+        pd.depthFormat = d->Caps().swapChainDepthFormat;
+        pd.depthTest = true;
+        pd.depthWrite = true;
         PipelineHandle pipe = d->CreatePipeline(pd);
         HX_REQUIRE(pipe.IsValid());
         const f32 verts[] = {-1, -1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, -1, 0, 0, 1, 1};

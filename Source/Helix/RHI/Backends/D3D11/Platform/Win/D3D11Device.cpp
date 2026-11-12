@@ -214,6 +214,8 @@ namespace helix::rhi
             ID3D11DeviceContext1* context1 = nullptr;
             IDXGISwapChain1* swapChain = nullptr;
             ID3D11RenderTargetView* backBufferRtv = nullptr;
+            ID3D11Texture2D* backDepth = nullptr;
+            ID3D11DepthStencilView* backDepthDsv = nullptr;
             u32 backBufferWidth = 0, backBufferHeight = 0;
             bool tearing = false;
             bool vsync = true;
@@ -287,6 +289,7 @@ namespace helix::rhi
                 if (!LoadLibraries())
                     return false;
                 vsync = desc.vsync;
+                caps.swapChainDepthFormat = desc.window.window && IsDepthFormat(desc.swapChainDepthFormat) ? desc.swapChainDepthFormat : Format::Unknown;
                 const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
                 UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | (desc.debug ? D3D11_CREATE_DEVICE_DEBUG : 0);
                 D3D_FEATURE_LEVEL level{};
@@ -402,6 +405,21 @@ namespace helix::rhi
                 backBufferHeight = td.Height;
                 HRESULT hr = device->CreateRenderTargetView(backBuffer, nullptr, &backBufferRtv);
                 Release(backBuffer);
+                caps.swapChainFormat = Format::BGRA8Unorm;
+                if (Succeeded(hr) && caps.swapChainDepthFormat != Format::Unknown)
+                {
+                    D3D11_TEXTURE2D_DESC dd{};
+                    dd.Width = td.Width;
+                    dd.Height = td.Height;
+                    dd.MipLevels = 1;
+                    dd.ArraySize = 1;
+                    dd.Format = ToDxgi(caps.swapChainDepthFormat);
+                    dd.SampleDesc = {1, 0};
+                    dd.Usage = D3D11_USAGE_DEFAULT;
+                    dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+                    if (Failed(device->CreateTexture2D(&dd, nullptr, &backDepth)) || Failed(device->CreateDepthStencilView(backDepth, nullptr, &backDepthDsv)))
+                        return false;
+                }
                 return Succeeded(hr);
             }
 
@@ -440,6 +458,8 @@ namespace helix::rhi
                 Release(heapUav);
                 Release(heapSrv);
                 Release(heap);
+                Release(backDepthDsv);
+                Release(backDepth);
                 Release(backBufferRtv);
                 Release(swapChain);
                 Release(context1);
@@ -1225,6 +1245,8 @@ namespace helix::rhi
                 if (!swapChain || (width == backBufferWidth && height == backBufferHeight) || !width || !height)
                     return;
                 context->OMSetRenderTargets(0, nullptr, nullptr);
+                Release(backDepthDsv);
+                Release(backDepth);
                 Release(backBufferRtv);
                 swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
                 CreateBackBufferView();
@@ -1301,18 +1323,28 @@ namespace helix::rhi
                                 rtvs[i] = backBufferRtv;
                         }
                         Texture* depth = textures.Get(rp.depth.texture);
+                        ID3D11DepthStencilView* dsv = depth ? depth->dsv : nullptr;
                         if (depth)
                         {
                             width = depth->desc.width;
                             height = depth->desc.height;
                         }
-                        context->OMSetRenderTargets(rp.colorCount, rtvs, depth ? depth->dsv : nullptr);
+                        else
+                        {
+                            // A pass to the back buffer takes the swap chain's depth buffer.
+                            bool backBuffer = true;
+                            for (u32 i = 0; i < rp.colorCount; i++)
+                                backBuffer = backBuffer && rtvs[i] == backBufferRtv;
+                            if (backBuffer)
+                                dsv = backDepthDsv;
+                        }
+                        context->OMSetRenderTargets(rp.colorCount, rtvs, dsv);
                         ForgetBoundTextures();
                         for (u32 i = 0; i < rp.colorCount; i++)
                             if (rp.colors[i].load == LoadOp::Clear && rtvs[i])
                                 context->ClearRenderTargetView(rtvs[i], rp.colors[i].clearColor);
-                        if (depth && rp.depth.load == LoadOp::Clear)
-                            context->ClearDepthStencilView(depth->dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, rp.depth.clearDepth, rp.depth.clearStencil);
+                        if (dsv && rp.depth.load == LoadOp::Clear)
+                            context->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, rp.depth.clearDepth, rp.depth.clearStencil);
                         D3D11_VIEWPORT vp{0, 0, FLOAT(width), FLOAT(height), 0, 1};
                         context->RSSetViewports(1, &vp);
                         D3D11_RECT sc{0, 0, LONG(width), LONG(height)};

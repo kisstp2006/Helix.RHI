@@ -467,6 +467,9 @@ namespace helix::rhi
         bool textureCompressionASTC = false;
         u32 uniformBufferAlignment = 256;
         u32 maxTextureSize = 4096;
+        // The formats of the swap chain's back buffer and depth buffer (Unknown without a window or depth).
+        Format swapChainFormat = Format::Unknown;
+        Format swapChainDepthFormat = Format::Unknown;
         char renderer[128] = {};
     };
 

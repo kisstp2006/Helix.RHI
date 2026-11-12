@@ -24,6 +24,9 @@ namespace helix::rhi
         i32 adapter = -1;
         bool debug = false;
         bool vsync = true;
+        // The depth buffer of the swap chain (render passes to the back buffer use it); Unknown for none. OpenGL's
+        // default framebuffer always has 24 bit depth and 8 bit stencil.
+        Format swapChainDepthFormat = Format::Unknown;
         u32 transientBufferSize = 8u << 20;
         // Size of the bindless buffer heap, allocated on the first bindless buffer.
         u32 bindlessBufferHeapSize = 64u << 20;

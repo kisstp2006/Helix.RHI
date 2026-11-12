@@ -307,6 +307,12 @@ namespace helix::rhi
                     return false;
                 }
                 caps.backend = desc.backend == Backend::WebGL2 ? Backend::WebGL2 : es ? Backend::OpenGLES : Backend::OpenGL;
+                // The default framebuffer: RGBA8 with 24 bit depth and 8 bit stencil (the context's pixel format).
+                if (desc.window.window)
+                {
+                    caps.swapChainFormat = Format::RGBA8Unorm;
+                    caps.swapChainDepthFormat = Format::D24UnormS8Uint;
+                }
                 caps.apiMajor = u32(major);
                 caps.apiMinor = u32(minor);
                 bool web = caps.backend == Backend::WebGL2;

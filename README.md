@@ -15,7 +15,8 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
   fences release its memory once the GPU has passed the frame.
 - When several threads record, bracket the frame with `BeginFrame` and `EndFrame` and submit its lists in between. One frame
   (or one submit outside frames) may use at most `DeviceDesc::transientBufferSize` bytes.
-- A render pass without textures targets the swap chain back buffer.
+- A render pass without textures targets the swap chain back buffer and its depth buffer (`DeviceDesc::swapChainDepthFormat`;
+  OpenGL's default framebuffer always has one). `DeviceCaps` reports both formats.
 - Offscreen images have the same memory layout on every backend (top row first): GL uses clip control with an upper left origin when available, `ReadTexture` returns rows top first everywhere.
 - Shaders: DXBC bytecode for D3D11, GLSL or ESSL source for GL with a name to slot binding table.
 
