@@ -834,8 +834,27 @@ namespace helix::rhi
                                                                          u32(FormatImageBytes(desc.format, Max(1u, desc.width >> m), Max(1u, desc.height >> m)))});
                     }
                     const D3D11_SUBRESOURCE_DATA* data = !desc.initialData ? nullptr : desc.mipLevels > 1 ? all.Data() : init.Data();
-                    if (Failed(device->CreateTexture2D(&td, data, &tex)))
+                    // WARP of the CI's Windows version left the top half of a small mipped texture's data out, given at
+                    // creation or uploaded: there the data goes into a staging texture that the GPU copies.
+                    bool viaStaging = software && desc.initialData && desc.mipLevels > 1 && desc.sampleCount <= 1;
+                    if (Failed(device->CreateTexture2D(&td, viaStaging ? nullptr : data, &tex)))
                         return {};
+                    if (viaStaging)
+                    {
+                        D3D11_TEXTURE2D_DESC sd = td;
+                        sd.Usage = D3D11_USAGE_STAGING;
+                        sd.BindFlags = 0;
+                        sd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+                        sd.MiscFlags = 0;
+                        ID3D11Texture2D* staging = nullptr;
+                        if (Failed(device->CreateTexture2D(&sd, data, &staging)))
+                        {
+                            Release(tex);
+                            return {};
+                        }
+                        context->CopyResource(tex, staging);
+                        Release(staging);
+                    }
                     t.resource = tex;
                 }
                 if (bind & D3D11_BIND_SHADER_RESOURCE)
