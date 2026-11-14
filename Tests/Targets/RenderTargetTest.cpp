@@ -124,6 +124,7 @@ HX_TEST(RenderTargets, MipsLayersCopiesAndGeneratedMips)
         for (u32 y = 0; y < 4; y++)
             for (u32 x = 0; x < 4; x++)
                 texels[y * 4 + x] = y < 2 ? (x < 2 ? Rgba(255, 0, 0) : Rgba(0, 255, 0)) : (x < 2 ? Rgba(0, 0, 255) : Rgba(255, 255, 255));
+        std::printf("    the data %08x %08x %08x %08x %08x\n", texels[0], texels[3], texels[4], texels[12], texels[15]);
         TextureHandle mipped = d.CreateTexture({.format = Format::RGBA8Unorm, .width = 4, .height = 4, .mipLevels = 3,
                                                 .usage = TextureSampled | TextureRenderTarget, .initialData = texels});
         HX_REQUIRE(mipped.IsValid());
