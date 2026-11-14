@@ -31,6 +31,9 @@ namespace helix::rhi
         DrawIndexedIndirect,
         BeginGpuScope,
         EndGpuScope,
+        ResolveTexture,
+        CopyTexture,
+        GenerateMips,
     };
 
     struct CommandHeader
@@ -162,6 +165,25 @@ namespace helix::rhi
         const char* name;
     };
 
+    struct CmdResolveTexture
+    {
+        TextureHandle source;
+        TextureHandle destination;
+    };
+
+    struct CmdCopyTexture
+    {
+        TextureHandle source;
+        u32 sourceMip, sourceLayer;
+        TextureHandle destination;
+        u32 destinationMip, destinationLayer;
+    };
+
+    struct CmdGenerateMips
+    {
+        TextureHandle texture;
+    };
+
     // Commands are recorded as a compact byte stream on any thread and translated by the device on submit.
     class CommandList
     {
@@ -276,6 +298,16 @@ namespace helix::rhi
         // GPU timer scope; the name must stay valid for the lifetime of the device (a string literal).
         void BeginGpuScope(const char* name) { Push(CommandType::BeginGpuScope, CmdBeginGpuScope{name}); }
         void EndGpuScope() { Header(CommandType::EndGpuScope, 0); }
+
+        // Outside render passes. A multisampled texture into a single sampled one of the same size and format (color).
+        void ResolveTexture(TextureHandle source, TextureHandle destination) { Push(CommandType::ResolveTexture, CmdResolveTexture{source, destination}); }
+        // One whole subresource (mip and layer, a cube's face is a layer) into another of the same size and format.
+        void CopyTexture(TextureHandle source, u32 sourceMip, u32 sourceLayer, TextureHandle destination, u32 destinationMip, u32 destinationLayer)
+        {
+            Push(CommandType::CopyTexture, CmdCopyTexture{source, sourceMip, sourceLayer, destination, destinationMip, destinationLayer});
+        }
+        // The mips below the first from it, of a texture that is a render target and sampled.
+        void GenerateMips(TextureHandle texture) { Push(CommandType::GenerateMips, CmdGenerateMips{texture}); }
 
         template <typename F>
         void ForEach(F&& f) const

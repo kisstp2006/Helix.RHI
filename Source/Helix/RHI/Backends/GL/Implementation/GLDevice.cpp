@@ -188,7 +188,16 @@ namespace helix::rhi
         {
             GLuint id = 0;
             GLenum target = GL_TEXTURE_2D;
+            // A multisampled target is a renderbuffer (every GL and GLES version has those; it is resolved to be read).
+            GLuint renderbuffer = 0;
             TextureDesc desc{};
+        };
+
+        // A framebuffer object and the textures it holds (it goes with any of them).
+        struct Framebuffer
+        {
+            GLuint id = 0;
+            u32 textures[kMaxColorTargets + 1] = {};
         };
 
         struct Sampler
@@ -228,9 +237,10 @@ namespace helix::rhi
             Pool<Sampler, SamplerHandle> samplers;
             Pool<Shader, ShaderHandle> shaders;
             Pool<Pipeline, PipelineHandle> pipelines;
-            HashMap<u64, GLuint> framebuffers;
+            HashMap<u64, Framebuffer> framebuffers;
             GLuint vao = 0;
             GLuint readFramebuffer = 0;
+            GLuint blitFramebuffer = 0;
 
             BufferHandle transient;
             GLuint transientId = 0;
@@ -357,6 +367,10 @@ namespace helix::rhi
                 glGenVertexArrays(1, &vao);
                 glBindVertexArray(vao);
                 glGenFramebuffers(1, &readFramebuffer);
+                glGenFramebuffers(1, &blitFramebuffer);
+                GLint samples = 1;
+                glGetIntegerv(GL_MAX_SAMPLES, &samples);
+                caps.maxSamples = u32(Max(samples, 1));
                 if (!es)
                     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
@@ -420,13 +434,14 @@ namespace helix::rhi
                     if (!queries.Empty())
                         glDeleteQueries(GLsizei(queries.Size()), queries.Data());
                 for (auto e : framebuffers)
-                    glDeleteFramebuffers(1, &e.value);
+                    glDeleteFramebuffers(1, &e.value.id);
                 for (u32 i = 0; i < bindless.Size(); i++)
                     if (bindless.Data()[i])
                         glMakeTextureHandleNonResidentARB(bindless.Data()[i]);
                 if (bindlessBuffer)
                     glDeleteBuffers(1, &bindlessBuffer);
                 glDeleteFramebuffers(1, &readFramebuffer);
+                glDeleteFramebuffers(1, &blitFramebuffer);
                 glDeleteVertexArrays(1, &vao);
                 DestroyGLContext(context);
                 context = nullptr;
@@ -528,6 +543,17 @@ namespace helix::rhi
                 GLFormat f = ToGL(desc.format);
                 if (!f.internal)
                     return {};
+                if (desc.sampleCount > 1)
+                {
+                    if (desc.type != TextureType::Texture2D || desc.sampleCount > caps.maxSamples)
+                        return {};
+                    t.target = GL_RENDERBUFFER;
+                    glGenRenderbuffers(1, &t.renderbuffer);
+                    glBindRenderbuffer(GL_RENDERBUFFER, t.renderbuffer);
+                    glRenderbufferStorageMultisample(GL_RENDERBUFFER, GLsizei(desc.sampleCount), f.internal, GLsizei(desc.width), GLsizei(desc.height));
+                    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+                    return textures.Add(Move(t));
+                }
                 glGenTextures(1, &t.id);
                 glBindTexture(t.target, t.id);
                 GLsizei mips = GLsizei(desc.mipLevels);
@@ -720,14 +746,21 @@ namespace helix::rhi
                 Texture t;
                 if (!textures.Remove(h, t))
                     return;
-                glDeleteTextures(1, &t.id);
+                if (t.id)
+                    glDeleteTextures(1, &t.id);
+                if (t.renderbuffer)
+                    glDeleteRenderbuffers(1, &t.renderbuffer);
                 Array<u64> stale;
                 for (auto e : framebuffers)
-                    if ((e.key & 0xFFFFFFFFull) == h.value || (e.key >> 32) == h.value)
-                        stale.Push(e.key);
+                    for (u32 texture : e.value.textures)
+                        if (texture == h.value)
+                        {
+                            stale.Push(e.key);
+                            break;
+                        }
                 for (u64 k : stale)
                 {
-                    glDeleteFramebuffers(1, framebuffers.Find(k));
+                    glDeleteFramebuffers(1, &framebuffers.Find(k)->id);
                     framebuffers.Remove(k);
                 }
             }
@@ -1027,32 +1060,87 @@ namespace helix::rhi
             void Resize(u32, u32) override {}
             void WaitIdle() override { glFinish(); }
 
+            // A texture's mip and layer (a cube's face) at an attachment point of the bound framebuffer.
+            void Attach(GLenum framebuffer, GLenum point, const Texture& t, u32 mip, u32 layer)
+            {
+                if (t.renderbuffer)
+                    glFramebufferRenderbuffer(framebuffer, point, GL_RENDERBUFFER, t.renderbuffer);
+                else if (t.target == GL_TEXTURE_CUBE_MAP)
+                    glFramebufferTexture2D(framebuffer, point, GL_TEXTURE_CUBE_MAP_POSITIVE_X + layer, t.id, GLint(mip));
+                else if (t.target == GL_TEXTURE_2D_ARRAY || t.target == GL_TEXTURE_3D)
+                    glFramebufferTextureLayer(framebuffer, point, t.id, GLint(mip), GLint(layer));
+                else
+                    glFramebufferTexture2D(framebuffer, point, GL_TEXTURE_2D, t.id, GLint(mip));
+            }
+
+            static GLenum DepthPoint(Format f) { return f == Format::D24UnormS8Uint ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT; }
+
             GLuint FramebufferFor(const RenderPassDesc& rp)
             {
-                u64 key = u64(rp.colors[0].texture.value) | (u64(rp.depth.texture.value) << 32);
-                for (u32 i = 1; i < rp.colorCount; i++)
-                    key = key * 1099511628211ull ^ rp.colors[i].texture.value;
-                if (GLuint* existing = framebuffers.Find(key))
-                    return *existing;
-                GLuint fbo = 0;
-                glGenFramebuffers(1, &fbo);
-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                u64 key = 1469598103934665603ull;
+                auto mix = [&](u64 v) { key = (key ^ v) * 1099511628211ull; };
+                for (u32 i = 0; i < rp.colorCount; i++)
+                    mix(u64(rp.colors[i].texture.value) | u64(rp.colors[i].mipLevel) << 32 | u64(rp.colors[i].layer) << 40);
+                mix(u64(rp.depth.texture.value) | u64(rp.depth.mipLevel) << 32 | u64(rp.depth.layer) << 40 | 1ull << 63);
+                if (Framebuffer* existing = framebuffers.Find(key))
+                    return existing->id;
+                Framebuffer fb;
+                glGenFramebuffers(1, &fb.id);
+                glBindFramebuffer(GL_FRAMEBUFFER, fb.id);
                 GLenum drawBuffers[kMaxColorTargets];
                 for (u32 i = 0; i < rp.colorCount; i++)
                 {
                     Texture* t = textures.Get(rp.colors[i].texture);
                     drawBuffers[i] = t ? GL_COLOR_ATTACHMENT0 + i : GL_NONE;
                     if (t)
-                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, t->id, GLint(rp.colors[i].mipLevel));
+                    {
+                        Attach(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, *t, rp.colors[i].mipLevel, rp.colors[i].layer);
+                        fb.textures[i] = rp.colors[i].texture.value;
+                    }
                 }
                 glDrawBuffers(GLsizei(rp.colorCount), drawBuffers);
                 if (Texture* d = textures.Get(rp.depth.texture))
-                    glFramebufferTexture2D(GL_FRAMEBUFFER, d->desc.format == Format::D24UnormS8Uint ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,
-                                           GL_TEXTURE_2D, d->id, 0);
+                {
+                    Attach(GL_FRAMEBUFFER, DepthPoint(d->desc.format), *d, rp.depth.mipLevel, rp.depth.layer);
+                    fb.textures[kMaxColorTargets] = rp.depth.texture.value;
+                }
                 if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
                     HX_LOG_ERROR(GLLog, "incomplete framebuffer");
-                framebuffers.Set(key, fbo);
-                return fbo;
+                framebuffers.Set(key, fb);
+                return fb.id;
+            }
+
+            // One subresource into another through the two blit framebuffers (resolves multisampled ones too).
+            void Blit(TextureHandle from, u32 fromMip, u32 fromLayer, TextureHandle to, u32 toMip, u32 toLayer)
+            {
+                Texture* s = textures.Get(from);
+                Texture* d = textures.Get(to);
+                if (!s || !d)
+                    return;
+                bool depth = IsDepthFormat(s->desc.format);
+                GLenum point = depth ? DepthPoint(s->desc.format) : GL_COLOR_ATTACHMENT0;
+                Barrier();
+                glDisable(GL_SCISSOR_TEST);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+                Attach(GL_READ_FRAMEBUFFER, point, *s, fromMip, fromLayer);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, blitFramebuffer);
+                Attach(GL_DRAW_FRAMEBUFFER, point, *d, toMip, toLayer);
+                if (!depth)
+                {
+                    glReadBuffer(GL_COLOR_ATTACHMENT0);
+                    GLenum buffer = GL_COLOR_ATTACHMENT0;
+                    glDrawBuffers(1, &buffer);
+                }
+                GLint sw = GLint(Max(1u, s->desc.width >> fromMip)), sh = GLint(Max(1u, s->desc.height >> fromMip));
+                GLint dw = GLint(Max(1u, d->desc.width >> toMip)), dh = GLint(Max(1u, d->desc.height >> toMip));
+                GLbitfield mask = depth ? (s->desc.format == Format::D24UnormS8Uint ? GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT : GL_DEPTH_BUFFER_BIT)
+                                        : GL_COLOR_BUFFER_BIT;
+                glBlitFramebuffer(0, 0, sw, sh, 0, 0, dw, dh, mask, GL_NEAREST);
+                // Detached again: the blit framebuffers hold nothing between commands.
+                glFramebufferRenderbuffer(GL_READ_FRAMEBUFFER, point, GL_RENDERBUFFER, 0);
+                glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, point, GL_RENDERBUFFER, 0);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                appliedPipeline = {};
             }
 
             void ApplyPipeline(Pipeline* p)
@@ -1157,8 +1245,9 @@ namespace helix::rhi
                         {
                             glBindFramebuffer(GL_FRAMEBUFFER, FramebufferFor(rp));
                             Texture* sizeSource = first ? first : depth;
-                            width = sizeSource->desc.width;
-                            height = sizeSource->desc.height;
+                            u32 mip = first ? rp.colors[0].mipLevel : rp.depth.mipLevel;
+                            width = Max(1u, sizeSource->desc.width >> mip);
+                            height = Max(1u, sizeSource->desc.height >> mip);
                         }
                         else
                         {
@@ -1403,6 +1492,28 @@ namespace helix::rhi
                     case CommandType::EndGpuScope:
                         WriteTimestamp(timers.End());
                         break;
+                    case CommandType::ResolveTexture:
+                    {
+                        const CmdResolveTexture& c = CommandData<CmdResolveTexture>(data);
+                        Blit(c.source, 0, 0, c.destination, 0, 0);
+                        break;
+                    }
+                    case CommandType::CopyTexture:
+                    {
+                        const CmdCopyTexture& c = CommandData<CmdCopyTexture>(data);
+                        Blit(c.source, c.sourceMip, c.sourceLayer, c.destination, c.destinationMip, c.destinationLayer);
+                        break;
+                    }
+                    case CommandType::GenerateMips:
+                    {
+                        if (Texture* t = textures.Get(CommandData<CmdGenerateMips>(data).texture); t && t->id)
+                        {
+                            Barrier();
+                            glBindTexture(t->target, t->id);
+                            glGenerateMipmap(t->target);
+                        }
+                        break;
+                    }
                     }
                 });
                 FenceTransient();

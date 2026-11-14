@@ -16,6 +16,9 @@ namespace helix::rhi
 
     namespace
     {
+        // The subresource index of a mip of a layer.
+        constexpr UINT Subresource(UINT mip, UINT layer, UINT mips) { return mip + layer * mips; }
+
         DXGI_FORMAT ToDxgi(Format f)
         {
             switch (f)
@@ -118,6 +121,9 @@ namespace helix::rhi
             ID3D11RenderTargetView* rtv = nullptr;
             ID3D11DepthStencilView* dsv = nullptr;
             ID3D11UnorderedAccessView* uavs[16] = {};
+            // Views of other mips and layers than the first, by mip << 16 | layer.
+            HashMap<u32, ID3D11RenderTargetView*> rtvs = HashMap<u32, ID3D11RenderTargetView*>();
+            HashMap<u32, ID3D11DepthStencilView*> dsvs = HashMap<u32, ID3D11DepthStencilView*>();
             TextureDesc desc{};
         };
 
@@ -170,6 +176,10 @@ namespace helix::rhi
             Release(t.srv);
             Release(t.rtv);
             Release(t.dsv);
+            for (auto e : t.rtvs)
+                Release(e.value);
+            for (auto e : t.dsvs)
+                Release(e.value);
             Release(t.resource);
         }
 
@@ -325,6 +335,16 @@ namespace helix::rhi
                 caps.textureCompressionRGTC = true;
                 caps.textureCompressionBPTC = level >= D3D_FEATURE_LEVEL_11_0;
                 caps.maxTextureSize = level >= D3D_FEATURE_LEVEL_11_0 ? 16384 : 8192;
+                caps.maxSamples = 1;
+                for (UINT samples : {8u, 4u, 2u})
+                {
+                    UINT quality = 0;
+                    if (Succeeded(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R8G8B8A8_UNORM, samples, &quality)) && quality > 0)
+                    {
+                        caps.maxSamples = samples;
+                        break;
+                    }
+                }
                 D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
                 if (Succeeded(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))))
                     caps.uniformBufferOffsets = context1 && options.ConstantBufferOffsetting && options.MapNoOverwriteOnDynamicConstantBuffer;
@@ -760,11 +780,18 @@ namespace helix::rhi
                     td.Usage = D3D11_USAGE_DEFAULT;
                     td.BindFlags = bind;
                     td.MiscFlags = cube ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
+                    // A sampled render target with mips can make them (GenerateMips).
+                    if ((bind & D3D11_BIND_RENDER_TARGET) && (bind & D3D11_BIND_SHADER_RESOURCE) && desc.mipLevels > 1)
+                        td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
                     ID3D11Texture2D* tex = nullptr;
                     bool withData = desc.initialData && desc.mipLevels == 1;
                     if (Failed(device->CreateTexture2D(&td, withData ? init.Data() : nullptr, &tex)))
                         return {};
                     t.resource = tex;
+                    // With mips the data is the first mip of each layer.
+                    if (desc.initialData && !withData)
+                        for (u32 i = 0; i < layers; i++)
+                            context->UpdateSubresource(tex, Subresource(0, i, desc.mipLevels), nullptr, init[i].pSysMem, rowBytes, imageBytes);
                 }
                 if (bind & D3D11_BIND_SHADER_RESOURCE)
                 {
@@ -949,6 +976,76 @@ namespace helix::rhi
                     Release(b.srv);
                     Release(b.buffer);
                 }
+            }
+
+            // The resource a texture lives in (a bindless pool's array, its slice added to the layer) and its mip count.
+            ID3D11Resource* ResourceOf(Texture& t, u32& mips, u32& layer)
+            {
+                if (t.pool >= 0)
+                {
+                    BindlessPool& p = bindlessPools[usize(t.pool)];
+                    mips = p.mips;
+                    layer += t.slice;
+                    return p.array;
+                }
+                mips = t.desc.mipLevels;
+                return t.resource;
+            }
+
+            // The render target view of a mip and layer (made once).
+            ID3D11RenderTargetView* RtvFor(Texture& t, u32 mip, u32 layer)
+            {
+                if (mip == 0 && layer == 0 && t.desc.type == TextureType::Texture2D)
+                    return t.rtv;
+                u32 key = mip << 16 | layer;
+                if (ID3D11RenderTargetView** v = t.rtvs.Find(key))
+                    return *v;
+                D3D11_RENDER_TARGET_VIEW_DESC rd{};
+                rd.Format = ToDxgi(t.desc.format);
+                if (t.desc.type == TextureType::Texture3D)
+                {
+                    rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE3D;
+                    rd.Texture3D = {mip, layer, 1};
+                }
+                else if (t.desc.type == TextureType::Texture2D)
+                {
+                    rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                    rd.Texture2D = {mip};
+                }
+                else
+                {
+                    rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+                    rd.Texture2DArray = {mip, layer, 1};
+                }
+                ID3D11RenderTargetView* view = nullptr;
+                device->CreateRenderTargetView(t.resource, &rd, &view);
+                t.rtvs.Set(key, view);
+                return view;
+            }
+
+            ID3D11DepthStencilView* DsvFor(Texture& t, u32 mip, u32 layer)
+            {
+                if (mip == 0 && layer == 0)
+                    return t.dsv;
+                u32 key = mip << 16 | layer;
+                if (ID3D11DepthStencilView** v = t.dsvs.Find(key))
+                    return *v;
+                D3D11_DEPTH_STENCIL_VIEW_DESC dd{};
+                dd.Format = ToDxgi(t.desc.format);
+                if (t.desc.type == TextureType::Texture2D)
+                {
+                    dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+                    dd.Texture2D = {mip};
+                }
+                else
+                {
+                    dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+                    dd.Texture2DArray = {mip, layer, 1};
+                }
+                ID3D11DepthStencilView* view = nullptr;
+                device->CreateDepthStencilView(t.resource, &dd, &view);
+                t.dsvs.Set(key, view);
+                return view;
             }
 
             void Destroy(TextureHandle h) override
@@ -1315,19 +1412,19 @@ namespace helix::rhi
                         {
                             if (Texture* t = textures.Get(rp.colors[i].texture))
                             {
-                                rtvs[i] = t->rtv;
-                                width = t->desc.width;
-                                height = t->desc.height;
+                                rtvs[i] = RtvFor(*t, rp.colors[i].mipLevel, rp.colors[i].layer);
+                                width = Max(1u, t->desc.width >> rp.colors[i].mipLevel);
+                                height = Max(1u, t->desc.height >> rp.colors[i].mipLevel);
                             }
                             else
                                 rtvs[i] = backBufferRtv;
                         }
                         Texture* depth = textures.Get(rp.depth.texture);
-                        ID3D11DepthStencilView* dsv = depth ? depth->dsv : nullptr;
+                        ID3D11DepthStencilView* dsv = depth ? DsvFor(*depth, rp.depth.mipLevel, rp.depth.layer) : nullptr;
                         if (depth)
                         {
-                            width = depth->desc.width;
-                            height = depth->desc.height;
+                            width = Max(1u, depth->desc.width >> rp.depth.mipLevel);
+                            height = Max(1u, depth->desc.height >> rp.depth.mipLevel);
                         }
                         else
                         {
@@ -1562,6 +1659,44 @@ namespace helix::rhi
                     case CommandType::EndGpuScope:
                         WriteTimestamp(timers.End());
                         break;
+                    case CommandType::ResolveTexture:
+                    {
+                        const CmdResolveTexture& c = CommandData<CmdResolveTexture>(data);
+                        Texture* s = textures.Get(c.source);
+                        Texture* d = textures.Get(c.destination);
+                        if (s && d && d->pool < 0)
+                        {
+                            context->OMSetRenderTargets(0, nullptr, nullptr);
+                            context->ResolveSubresource(d->resource, 0, s->resource, 0, ToDxgi(d->desc.format));
+                        }
+                        break;
+                    }
+                    case CommandType::CopyTexture:
+                    {
+                        const CmdCopyTexture& c = CommandData<CmdCopyTexture>(data);
+                        Texture* s = textures.Get(c.source);
+                        Texture* d = textures.Get(c.destination);
+                        if (s && d)
+                        {
+                            context->OMSetRenderTargets(0, nullptr, nullptr);
+                            u32 sourceMips = 0, destinationMips = 0, sourceLayer = c.sourceLayer, destinationLayer = c.destinationLayer;
+                            ID3D11Resource* from = ResourceOf(*s, sourceMips, sourceLayer);
+                            ID3D11Resource* to = ResourceOf(*d, destinationMips, destinationLayer);
+                            context->CopySubresourceRegion(to, Subresource(c.destinationMip, destinationLayer, destinationMips), 0, 0, 0, from,
+                                                           Subresource(c.sourceMip, sourceLayer, sourceMips), nullptr);
+                        }
+                        break;
+                    }
+                    case CommandType::GenerateMips:
+                    {
+                        Texture* t = textures.Get(CommandData<CmdGenerateMips>(data).texture);
+                        if (t && t->srv && t->pool < 0 && t->desc.mipLevels > 1)
+                        {
+                            context->OMSetRenderTargets(0, nullptr, nullptr);
+                            context->GenerateMips(t->srv);
+                        }
+                        break;
+                    }
                     }
                 });
                 if (!inFrame)

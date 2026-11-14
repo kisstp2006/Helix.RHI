@@ -410,6 +410,8 @@ namespace helix::rhi
     struct DepthAttachment
     {
         TextureHandle texture;
+        u32 mipLevel = 0;
+        u32 layer = 0;
         LoadOp load = LoadOp::Clear;
         f32 clearDepth = 1.0f;
         u8 clearStencil = 0;
@@ -467,6 +469,8 @@ namespace helix::rhi
         bool textureCompressionASTC = false;
         u32 uniformBufferAlignment = 256;
         u32 maxTextureSize = 4096;
+        // The most samples of a multisampled render target (1: none).
+        u32 maxSamples = 1;
         // The formats of the swap chain's back buffer and depth buffer (Unknown without a window or depth).
         Format swapChainFormat = Format::Unknown;
         Format swapChainDepthFormat = Format::Unknown;

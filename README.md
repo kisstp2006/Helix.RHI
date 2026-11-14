@@ -20,6 +20,15 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - Offscreen images have the same memory layout on every backend (top row first): GL uses clip control with an upper left origin when available, `ReadTexture` returns rows top first everywhere.
 - Shaders: DXBC bytecode for D3D11, GLSL or ESSL source for GL with a name to slot binding table.
 
+## Render targets
+
+- A render pass draws into any mip and layer of a texture (a cube's face is a layer): `ColorAttachment` and
+  `DepthAttachment` take `mipLevel` and `layer`.
+- Multisampled textures (`TextureDesc::sampleCount`, at most `DeviceCaps::maxSamples`) are render targets; on GL they
+  are renderbuffers. `ResolveTexture` resolves one into a single sampled texture of the same size and format.
+- `CopyTexture` copies one whole subresource into another of the same size and format, and `GenerateMips` makes the
+  mips below the first of a texture that is a render target and sampled. These three run outside render passes.
+
 ## Compute, storage and indirect
 
 - `CreateComputePipeline` takes a compute shader; `SetPipeline` selects it for `Dispatch` and `DispatchIndirect`.
@@ -114,7 +123,7 @@ the tests use.
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
-textures, a GPU driven indirect draw, every block format a device offers decoded by the GPU against the Helix.Image decoders, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
+textures, a GPU driven indirect draw, multisampled targets resolved, draws into mips and layers, subresource copies and generated mips, every block format a device offers decoded by the GPU against the Helix.Image decoders, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
 The shaders of the tests and the example are in `Tests/Support/CompiledShaders.h`: GLSL, GLSL ES and Direct3D bytecode
 generated from C# sources by Helix.ShaderCompiler (its `export_rhi_shaders` target; the sources are in its
 `Tests/Shaders/Rhi`). This library sits below that compiler, so the generated file is checked in. No shader is written
