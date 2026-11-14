@@ -7,6 +7,7 @@
 #include <Helix/D3D11/D3D11.h>
 #include <Helix/RHI/Device/Device.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -247,6 +248,8 @@ namespace helix::rhi
             u32 backBufferWidth = 0, backBufferHeight = 0;
             bool tearing = false;
             bool vsync = true;
+            // WARP: its GenerateMips came out wrong for small textures on some Windows versions; mips are made on the CPU.
+            bool software = false;
             DeviceCaps caps{};
             Pool<Buffer, BufferHandle> buffers;
             Pool<Texture, TextureHandle> textures;
@@ -389,6 +392,8 @@ namespace helix::rhi
                     DXGI_ADAPTER_DESC ad{};
                     adapter->GetDesc(&ad);
                     std::snprintf(caps.renderer, sizeof(caps.renderer), "%ls", ad.Description);
+                    // The Microsoft Basic Render Driver (WARP).
+                    software = ad.VendorId == 0x1414 && ad.DeviceId == 0x8c;
                 }
                 Release(adapter);
                 Release(dxgiDevice);
@@ -1781,7 +1786,7 @@ namespace helix::rhi
                     case CommandType::GenerateMips:
                     {
                         Texture* t = textures.Get(CommandData<CmdGenerateMips>(data).texture);
-                        if (t && t->srv && t->pool < 0 && t->desc.mipLevels > 1)
+                        if (t && t->srv && t->pool < 0 && t->desc.mipLevels > 1 && !(software && CpuMips(*t)))
                         {
                             context->OMSetRenderTargets(0, nullptr, nullptr);
                             context->GenerateMips(t->srv);
@@ -1794,6 +1799,171 @@ namespace helix::rhi
                 });
                 if (!inFrame)
                     transientRing.NextEpoch();
+            }
+
+            // How the CPU filters a format's texels: channels, and 8 bit unorm (sRGB or not), half or float values.
+            struct MipFormat
+            {
+                u32 channels = 0;
+                u32 kind = 0; // 0 unorm8, 1 srgb8, 2 half, 3 float
+            };
+
+            static MipFormat MipFormatOf(Format f)
+            {
+                switch (f)
+                {
+                case Format::R8Unorm: return {1, 0};
+                case Format::RG8Unorm: return {2, 0};
+                case Format::RGBA8Unorm:
+                case Format::BGRA8Unorm: return {4, 0};
+                case Format::RGBA8Srgb:
+                case Format::BGRA8Srgb: return {4, 1};
+                case Format::R16Float: return {1, 2};
+                case Format::RG16Float: return {2, 2};
+                case Format::RGBA16Float: return {4, 2};
+                case Format::R32Float: return {1, 3};
+                case Format::RG32Float: return {2, 3};
+                case Format::RGBA32Float: return {4, 3};
+                default: return {};
+                }
+            }
+
+            static f32 HalfToFloat(u16 h)
+            {
+                u32 sign = u32(h >> 15) << 31, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF, bits;
+                if (exponent == 0)
+                {
+                    if (mantissa == 0)
+                        bits = sign;
+                    else
+                    {
+                        exponent = 127 - 15 + 1;
+                        while ((mantissa & 0x400) == 0)
+                            mantissa <<= 1, exponent--;
+                        bits = sign | (exponent << 23) | ((mantissa & 0x3FF) << 13);
+                    }
+                }
+                else if (exponent == 31)
+                    bits = sign | 0x7F800000 | (mantissa << 13);
+                else
+                    bits = sign | ((exponent + 127 - 15) << 23) | (mantissa << 13);
+                f32 f;
+                std::memcpy(&f, &bits, 4);
+                return f;
+            }
+
+            static u16 FloatToHalf(f32 f)
+            {
+                u32 bits;
+                std::memcpy(&bits, &f, 4);
+                u32 sign = (bits >> 16) & 0x8000;
+                i32 exponent = i32((bits >> 23) & 0xFF) - 127 + 15;
+                u32 mantissa = bits & 0x7FFFFF;
+                if (((bits >> 23) & 0xFF) == 0xFF)
+                    return u16(sign | 0x7C00 | (mantissa ? 0x200 : 0));
+                if (exponent >= 31)
+                    return u16(sign | 0x7C00);
+                if (exponent <= 0)
+                {
+                    if (exponent < -10)
+                        return u16(sign);
+                    mantissa |= 0x800000;
+                    u32 shift = u32(14 - exponent);
+                    return u16(sign | ((mantissa + (1u << (shift - 1))) >> shift));
+                }
+                u32 h = sign | (u32(exponent) << 10) | (mantissa >> 13);
+                return u16(h + ((mantissa >> 12) & 1));
+            }
+
+            static f32 SrgbToLinear(f32 c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+            static f32 LinearToSrgb(f32 c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f; }
+
+            // A texture's mips from its first one on the CPU (a box filter; sRGB colors filtered linear), each layer.
+            bool CpuMips(Texture& t)
+            {
+                MipFormat f = MipFormatOf(t.desc.format);
+                if (f.channels == 0 || t.desc.type == TextureType::Texture3D || t.desc.sampleCount > 1)
+                    return false;
+                u32 layers = t.desc.type == TextureType::TextureCube ? 6u : Max(t.desc.depthOrLayers, 1u);
+                u32 mips = t.desc.mipLevels, bpp = FormatBytesPerPixel(t.desc.format), ch = f.channels, size = bpp / ch;
+                auto decode = [&](const u8* p, u32 c) -> f32 {
+                    if (f.kind == 3)
+                    {
+                        f32 v;
+                        std::memcpy(&v, p, 4);
+                        return v;
+                    }
+                    if (f.kind == 2)
+                    {
+                        u16 v;
+                        std::memcpy(&v, p, 2);
+                        return HalfToFloat(v);
+                    }
+                    f32 v = f32(*p) / 255.0f;
+                    return f.kind == 1 && c < 3 ? SrgbToLinear(v) : v;
+                };
+                auto encode = [&](f32 v, u8* p, u32 c) {
+                    if (f.kind == 3)
+                        std::memcpy(p, &v, 4);
+                    else if (f.kind == 2)
+                    {
+                        u16 h = FloatToHalf(v);
+                        std::memcpy(p, &h, 2);
+                    }
+                    else
+                    {
+                        if (f.kind == 1 && c < 3)
+                            v = LinearToSrgb(v);
+                        v = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+                        *p = u8(v * 255.0f + 0.5f);
+                    }
+                };
+                D3D11_TEXTURE2D_DESC sd{t.desc.width, t.desc.height, 1, 1, ToDxgi(t.desc.format), {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
+                for (u32 layer = 0; layer < layers; layer++)
+                {
+                    ID3D11Texture2D* staging = nullptr;
+                    if (Failed(device->CreateTexture2D(&sd, nullptr, &staging)))
+                        return false;
+                    context->CopySubresourceRegion(staging, 0, 0, 0, 0, t.resource, Subresource(0, layer, mips), nullptr);
+                    D3D11_MAPPED_SUBRESOURCE m{};
+                    if (Failed(context->Map(staging, 0, D3D11_MAP_READ, 0, &m)))
+                    {
+                        Release(staging);
+                        return false;
+                    }
+                    u32 w = t.desc.width, h = t.desc.height;
+                    Array<f32> src;
+                    src.Resize(usize(w) * h * ch);
+                    for (u32 y = 0; y < h; y++)
+                        for (u32 x = 0; x < w; x++)
+                            for (u32 c = 0; c < ch; c++)
+                                src[(usize(y) * w + x) * ch + c] = decode(static_cast<const u8*>(m.pData) + usize(y) * m.RowPitch + usize(x) * bpp + c * size, c);
+                    context->Unmap(staging, 0);
+                    Release(staging);
+                    Array<f32> dst;
+                    Array<u8> bytes;
+                    for (u32 mip = 1; mip < mips; mip++)
+                    {
+                        u32 nw = Max(1u, w >> 1), nh = Max(1u, h >> 1);
+                        dst.Resize(usize(nw) * nh * ch);
+                        for (u32 y = 0; y < nh; y++)
+                            for (u32 x = 0; x < nw; x++)
+                            {
+                                u32 x0 = Min(x * 2, w - 1), x1 = Min(x * 2 + 1, w - 1), y0 = Min(y * 2, h - 1), y1 = Min(y * 2 + 1, h - 1);
+                                for (u32 c = 0; c < ch; c++)
+                                    dst[(usize(y) * nw + x) * ch + c] = 0.25f * (src[(usize(y0) * w + x0) * ch + c] + src[(usize(y0) * w + x1) * ch + c] +
+                                                                                src[(usize(y1) * w + x0) * ch + c] + src[(usize(y1) * w + x1) * ch + c]);
+                            }
+                        bytes.Resize(usize(nw) * nh * bpp);
+                        for (usize i = 0; i < usize(nw) * nh; i++)
+                            for (u32 c = 0; c < ch; c++)
+                                encode(dst[i * ch + c], bytes.Data() + i * bpp + c * size, c);
+                        context->UpdateSubresource(t.resource, Subresource(mip, layer, mips), nullptr, bytes.Data(), nw * bpp, 0);
+                        src = dst;
+                        w = nw, h = nh;
+                    }
+                }
+                return true;
             }
 
             bool ReadTexture(TextureHandle handle, u32 mip, void* out, usize size) override
