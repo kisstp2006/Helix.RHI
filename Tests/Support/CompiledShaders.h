@@ -729,6 +729,334 @@ namespace helix::rhi::testing
         kDepthFragmentDxbc, sizeof(kDepthFragmentDxbc), kDepthFragmentBindings, 1,
     };
 
+    inline const unsigned char kUintColorVertexDxbc[] = {
+        68,88,66,67,148,65,109,208,65,179,15,196,146,152,99,210,111,23,60,102,1,0,0,0,72,1,0,0,3,0,0,0,
+        44,0,0,0,96,0,0,0,148,0,0,0,73,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,
+        0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,0,3,3,0,0,84,69,88,67,79,79,82,68,0,171,171,171,
+        79,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,0,0,0,0,1,0,0,0,3,0,0,0,
+        0,0,0,0,15,0,0,0,83,86,95,80,111,115,105,116,105,111,110,0,83,72,68,82,172,0,0,0,64,0,1,0,
+        43,0,0,0,95,0,0,3,50,16,16,0,0,0,0,0,103,0,0,4,242,32,16,0,0,0,0,0,1,0,0,0,
+        104,0,0,2,2,0,0,0,54,0,0,5,50,0,16,0,0,0,0,0,70,16,16,0,0,0,0,0,54,0,0,5,
+        50,0,16,0,1,0,0,0,70,0,16,0,0,0,0,0,54,0,0,8,66,0,16,0,1,0,0,0,2,64,0,0,
+        0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,63,54,0,0,8,130,0,16,0,1,0,0,0,2,64,0,0,
+        0,0,128,63,0,0,128,63,0,0,128,63,0,0,128,63,54,0,0,5,242,32,16,0,0,0,0,0,70,14,16,0,
+        1,0,0,0,62,0,0,1,
+    };
+    inline const CompiledShader kUintColorVertex = {
+        ShaderStage::Vertex,
+        "#version 330 core\n"
+        "\n"
+        "vec4 f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    return vec4(p_p, 0.5, 1.0);\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = f_Vertex_0(hx_in0);\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "\n"
+        "vec4 f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    return vec4(p_p, 0.5, 1.0);\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = f_Vertex_0(hx_in0);\n"
+        "}\n"
+        "",
+        kUintColorVertexDxbc, sizeof(kUintColorVertexDxbc), nullptr, 0,
+    };
+
+    inline const unsigned char kUintColorFragmentDxbc[] = {
+        68,88,66,67,24,95,35,15,190,235,95,212,244,237,54,213,188,202,32,43,1,0,0,0,228,0,0,0,3,0,0,0,
+        44,0,0,0,96,0,0,0,148,0,0,0,73,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,
+        0,0,0,0,1,0,0,0,3,0,0,0,0,0,0,0,15,0,0,0,83,86,95,80,111,115,105,116,105,111,110,0,
+        79,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,
+        0,0,0,0,15,0,0,0,83,86,95,84,97,114,103,101,116,0,171,171,83,72,68,82,72,0,0,0,64,0,0,0,
+        18,0,0,0,89,0,0,4,70,142,32,0,0,0,0,0,1,0,0,0,101,0,0,3,242,32,16,0,0,0,0,0,
+        104,0,0,2,1,0,0,0,54,0,0,6,242,32,16,0,0,0,0,0,70,142,32,0,0,0,0,0,0,0,0,0,
+        62,0,0,1,
+    };
+    inline const ShaderBinding kUintColorFragmentBindings[] = {{"hx_block_draw", BindingKind::UniformBuffer, 0}, };
+    inline const CompiledShader kUintColorFragment = {
+        ShaderStage::Fragment,
+        "#version 330 core\n"
+        "struct S_Helix_ShaderTests_Rhi_UintColor_Draw\n"
+        "{\n"
+        "    uvec4 m_value;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_draw\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_UintColor_Draw g_draw;\n"
+        "};\n"
+        "\n"
+        "uvec4 f_Fragment_0()\n"
+        "{\n"
+        "    return g_draw.m_value;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) out uvec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    hx_target0 = f_Fragment_0();\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "struct S_Helix_ShaderTests_Rhi_UintColor_Draw\n"
+        "{\n"
+        "    uvec4 m_value;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_draw\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_UintColor_Draw g_draw;\n"
+        "};\n"
+        "\n"
+        "uvec4 f_Fragment_0()\n"
+        "{\n"
+        "    return g_draw.m_value;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) out uvec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    hx_target0 = f_Fragment_0();\n"
+        "}\n"
+        "",
+        kUintColorFragmentDxbc, sizeof(kUintColorFragmentDxbc), kUintColorFragmentBindings, 1,
+    };
+
+    inline const unsigned char kInstanceRowVertexDxbc[] = {
+        68,88,66,67,192,224,180,196,247,216,27,18,216,118,37,171,249,248,107,216,1,0,0,0,244,3,0,0,3,0,0,0,
+        44,0,0,0,132,0,0,0,220,0,0,0,73,83,71,78,80,0,0,0,2,0,0,0,8,0,0,0,56,0,0,0,
+        0,0,0,0,0,0,0,0,3,0,0,0,0,0,0,0,3,3,0,0,65,0,0,0,0,0,0,0,8,0,0,0,
+        1,0,0,0,1,0,0,0,1,1,0,0,84,69,88,67,79,79,82,68,0,83,86,95,73,110,115,116,97,110,99,101,
+        73,68,0,171,79,83,71,78,80,0,0,0,2,0,0,0,8,0,0,0,56,0,0,0,0,0,0,0,1,0,0,0,
+        3,0,0,0,0,0,0,0,15,0,0,0,68,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,1,0,0,0,
+        15,0,0,0,83,86,95,80,111,115,105,116,105,111,110,0,84,69,88,67,79,79,82,68,0,171,171,171,83,72,68,82,
+        16,3,0,0,64,0,1,0,196,0,0,0,89,0,0,4,70,142,32,0,0,0,0,0,4,0,0,0,95,0,0,3,
+        50,16,16,0,0,0,0,0,103,0,0,4,242,32,16,0,0,0,0,0,1,0,0,0,101,0,0,3,242,32,16,0,
+        1,0,0,0,96,0,0,4,18,16,16,0,1,0,0,0,8,0,0,0,104,0,0,2,10,0,0,0,54,0,0,5,
+        50,0,16,0,0,0,0,0,70,16,16,0,0,0,0,0,54,0,0,5,18,0,16,0,6,0,0,0,6,16,16,0,
+        1,0,0,0,54,0,0,5,18,0,16,0,1,0,0,0,6,0,16,0,6,0,0,0,32,0,0,10,18,0,16,0,
+        6,0,0,0,6,0,16,0,1,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        31,0,4,3,10,0,16,0,6,0,0,0,54,0,0,6,242,0,16,0,5,0,0,0,70,142,32,0,0,0,0,0,
+        0,0,0,0,18,0,0,1,32,0,0,10,18,0,16,0,7,0,0,0,6,0,16,0,1,0,0,0,2,64,0,0,
+        1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,31,0,4,3,10,0,16,0,7,0,0,0,54,0,0,6,
+        242,0,16,0,5,0,0,0,70,142,32,0,0,0,0,0,1,0,0,0,18,0,0,1,32,0,0,10,18,0,16,0,
+        8,0,0,0,6,0,16,0,1,0,0,0,2,64,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,
+        31,0,4,3,10,0,16,0,8,0,0,0,54,0,0,6,242,0,16,0,5,0,0,0,70,142,32,0,0,0,0,0,
+        2,0,0,0,18,0,0,1,54,0,0,6,242,0,16,0,5,0,0,0,70,142,32,0,0,0,0,0,3,0,0,0,
+        21,0,0,1,21,0,0,1,21,0,0,1,54,0,0,5,242,0,16,0,2,0,0,0,70,14,16,0,5,0,0,0,
+        54,0,0,8,242,0,16,0,3,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        54,0,0,8,242,0,16,0,4,0,0,0,2,64,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        86,0,0,5,18,0,16,0,6,0,0,0,6,0,16,0,1,0,0,0,56,0,0,10,18,0,16,0,7,0,0,0,
+        6,0,16,0,6,0,0,0,2,64,0,0,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,7,
+        18,0,16,0,8,0,0,0,6,0,16,0,0,0,0,0,6,0,16,0,7,0,0,0,54,0,0,5,18,0,16,0,
+        9,0,0,0,6,0,16,0,8,0,0,0,54,0,0,5,34,0,16,0,9,0,0,0,86,5,16,0,0,0,0,0,
+        54,0,0,8,66,0,16,0,9,0,0,0,2,64,0,0,0,0,0,63,0,0,0,63,0,0,0,63,0,0,0,63,
+        54,0,0,8,130,0,16,0,9,0,0,0,2,64,0,0,0,0,128,63,0,0,128,63,0,0,128,63,0,0,128,63,
+        54,0,0,5,242,0,16,0,3,0,0,0,70,14,16,0,9,0,0,0,54,0,0,5,242,0,16,0,4,0,0,0,
+        70,14,16,0,2,0,0,0,54,0,0,5,242,32,16,0,0,0,0,0,70,14,16,0,3,0,0,0,54,0,0,5,
+        242,32,16,0,1,0,0,0,70,14,16,0,4,0,0,0,62,0,0,1,
+    };
+    inline const ShaderBinding kInstanceRowVertexBindings[] = {{"hx_block_draw", BindingKind::UniformBuffer, 0}, };
+    inline const CompiledShader kInstanceRowVertex = {
+        ShaderStage::Vertex,
+        "#version 330 core\n"
+        "struct S_Helix_ShaderTests_Rhi_InstanceRow_Varyings\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec4 m_color;\n"
+        "};\n"
+        "struct S_Helix_ShaderTests_Rhi_InstanceRow_Draw\n"
+        "{\n"
+        "    vec4 m_color0;\n"
+        "    vec4 m_color1;\n"
+        "    vec4 m_color2;\n"
+        "    vec4 m_color3;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_draw\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Draw g_draw;\n"
+        "};\n"
+        "\n"
+        "S_Helix_ShaderTests_Rhi_InstanceRow_Varyings f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    uint l0;\n"
+        "    vec4 l1;\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Varyings l2;\n"
+        "    vec4 t3;\n"
+        "    l0 = uint(gl_InstanceID);\n"
+        "    if ((l0 == 0u))\n"
+        "    {\n"
+        "        t3 = g_draw.m_color0;\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        if ((l0 == 1u))\n"
+        "        {\n"
+        "            t3 = g_draw.m_color1;\n"
+        "        }\n"
+        "        else\n"
+        "        {\n"
+        "            if ((l0 == 2u))\n"
+        "            {\n"
+        "                t3 = g_draw.m_color2;\n"
+        "            }\n"
+        "            else\n"
+        "            {\n"
+        "                t3 = g_draw.m_color3;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "    l1 = t3;\n"
+        "    l2 = S_Helix_ShaderTests_Rhi_InstanceRow_Varyings(vec4(0.0), vec4(0.0));\n"
+        "    l2.m_position = vec4((p_p.x + (float(l0) * 0.5)), p_p.y, 0.5, 1.0);\n"
+        "    l2.m_color = l1;\n"
+        "    return l2;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "out vec4 hx_v0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Varyings r = f_Vertex_0(hx_in0);\n"
+        "    gl_Position = r.m_position;\n"
+        "    hx_v0 = r.m_color;\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "struct S_Helix_ShaderTests_Rhi_InstanceRow_Varyings\n"
+        "{\n"
+        "    vec4 m_position;\n"
+        "    vec4 m_color;\n"
+        "};\n"
+        "struct S_Helix_ShaderTests_Rhi_InstanceRow_Draw\n"
+        "{\n"
+        "    vec4 m_color0;\n"
+        "    vec4 m_color1;\n"
+        "    vec4 m_color2;\n"
+        "    vec4 m_color3;\n"
+        "};\n"
+        "layout(std140) uniform hx_block_draw\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Draw g_draw;\n"
+        "};\n"
+        "\n"
+        "S_Helix_ShaderTests_Rhi_InstanceRow_Varyings f_Vertex_0(in vec2 p_p)\n"
+        "{\n"
+        "    uint l0;\n"
+        "    vec4 l1;\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Varyings l2;\n"
+        "    vec4 t3;\n"
+        "    l0 = uint(gl_InstanceID);\n"
+        "    if ((l0 == 0u))\n"
+        "    {\n"
+        "        t3 = g_draw.m_color0;\n"
+        "    }\n"
+        "    else\n"
+        "    {\n"
+        "        if ((l0 == 1u))\n"
+        "        {\n"
+        "            t3 = g_draw.m_color1;\n"
+        "        }\n"
+        "        else\n"
+        "        {\n"
+        "            if ((l0 == 2u))\n"
+        "            {\n"
+        "                t3 = g_draw.m_color2;\n"
+        "            }\n"
+        "            else\n"
+        "            {\n"
+        "                t3 = g_draw.m_color3;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "    l1 = t3;\n"
+        "    l2 = S_Helix_ShaderTests_Rhi_InstanceRow_Varyings(vec4(0.0), vec4(0.0));\n"
+        "    l2.m_position = vec4((p_p.x + (float(l0) * 0.5)), p_p.y, 0.5, 1.0);\n"
+        "    l2.m_color = l1;\n"
+        "    return l2;\n"
+        "}\n"
+        "\n"
+        "layout(location = 0) in vec2 hx_in0;\n"
+        "out vec4 hx_v0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    S_Helix_ShaderTests_Rhi_InstanceRow_Varyings r = f_Vertex_0(hx_in0);\n"
+        "    gl_Position = r.m_position;\n"
+        "    hx_v0 = r.m_color;\n"
+        "}\n"
+        "",
+        kInstanceRowVertexDxbc, sizeof(kInstanceRowVertexDxbc), kInstanceRowVertexBindings, 1,
+    };
+
+    inline const unsigned char kInstanceRowFragmentDxbc[] = {
+        68,88,66,67,174,209,237,116,99,127,16,48,172,9,159,7,100,211,134,84,1,0,0,0,20,1,0,0,3,0,0,0,
+        44,0,0,0,132,0,0,0,184,0,0,0,73,83,71,78,80,0,0,0,2,0,0,0,8,0,0,0,56,0,0,0,
+        0,0,0,0,1,0,0,0,3,0,0,0,0,0,0,0,15,0,0,0,68,0,0,0,0,0,0,0,0,0,0,0,
+        3,0,0,0,1,0,0,0,15,15,0,0,83,86,95,80,111,115,105,116,105,111,110,0,84,69,88,67,79,79,82,68,
+        0,171,171,171,79,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,0,0,0,0,0,0,0,0,
+        3,0,0,0,0,0,0,0,15,0,0,0,83,86,95,84,97,114,103,101,116,0,171,171,83,72,68,82,84,0,0,0,
+        64,0,0,0,21,0,0,0,98,16,0,3,242,16,16,0,1,0,0,0,101,0,0,3,242,32,16,0,0,0,0,0,
+        104,0,0,2,1,0,0,0,54,0,0,5,242,0,16,0,0,0,0,0,70,30,16,0,1,0,0,0,54,0,0,5,
+        242,32,16,0,0,0,0,0,70,14,16,0,0,0,0,0,62,0,0,1,
+    };
+    inline const CompiledShader kInstanceRowFragment = {
+        ShaderStage::Fragment,
+        "#version 330 core\n"
+        "\n"
+        "vec4 f_Fragment_0(in vec4 p_color)\n"
+        "{\n"
+        "    return p_color;\n"
+        "}\n"
+        "\n"
+        "in vec4 hx_v0;\n"
+        "layout(location = 0) out vec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    hx_target0 = f_Fragment_0(hx_v0);\n"
+        "}\n"
+        "",
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "precision highp int;\n"
+        "\n"
+        "vec4 f_Fragment_0(in vec4 p_color)\n"
+        "{\n"
+        "    return p_color;\n"
+        "}\n"
+        "\n"
+        "in vec4 hx_v0;\n"
+        "layout(location = 0) out vec4 hx_target0;\n"
+        "\n"
+        "void main()\n"
+        "{\n"
+        "    hx_target0 = f_Fragment_0(hx_v0);\n"
+        "}\n"
+        "",
+        kInstanceRowFragmentDxbc, sizeof(kInstanceRowFragmentDxbc), nullptr, 0,
+    };
+
     inline const unsigned char kPlacedVertexDxbc[] = {
         68,88,66,67,171,188,1,17,91,15,31,123,23,45,205,150,164,41,253,170,1,0,0,0,160,1,0,0,3,0,0,0,
         44,0,0,0,96,0,0,0,148,0,0,0,73,83,71,78,44,0,0,0,1,0,0,0,8,0,0,0,32,0,0,0,

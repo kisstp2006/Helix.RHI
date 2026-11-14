@@ -32,6 +32,11 @@ namespace helix::rhi
         u32 transientBufferSize = 8u << 20;
         // Size of the bindless buffer heap, allocated on the first bindless buffer.
         u32 bindlessBufferHeapSize = 64u << 20;
+        // A device thread owns the backend: submits, destroys and presents are queued and return at once, creations and
+        // reads wait for it (calls stay in order). Ignored where threads are not supported (the Web).
+        bool threaded = false;
+        // Present waits while more frames than this are queued for the device thread.
+        u32 maxQueuedFrames = 1;
     };
 
     class Device
@@ -45,6 +50,8 @@ namespace helix::rhi
 
         virtual ~Device() = default;
         virtual const DeviceCaps& Caps() const = 0;
+        // A device thread owns the backend (DeviceDesc::threaded).
+        virtual bool Threaded() const { return false; }
 
         virtual BufferHandle CreateBuffer(const BufferDesc& desc) = 0;
         virtual TextureHandle CreateTexture(const TextureDesc& desc) = 0;

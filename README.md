@@ -29,6 +29,29 @@ Rendering hardware interface of the Helix engine: one API over Direct3D 11 and t
 - `CopyTexture` copies one whole subresource into another of the same size and format, and `GenerateMips` makes the
   mips below the first of a texture that is a render target and sampled. These three run outside render passes.
 
+## Pipeline state
+
+- `PipelineDesc` holds stencil state (`stencil`, the reference value from `CommandList::SetStencilReference`, 0 at the
+  start of a submit), depth bias (`depthBias`, `depthBiasSlope`, `depthBiasClamp`), `depthClip` (off: depths are
+  clamped, `DeviceCaps::depthClamp`), `conservative` rasterization (`DeviceCaps::conservativeRasterization`: Direct3D
+  11.3, GL_NV_conservative_raster or GL_INTEL_conservative_rasterization), `alphaToCoverage` and logical operations
+  (`logicOpEnabled`, `logicOp`; `DeviceCaps::logicOps`; Direct3D 11.1 applies them to UINT targets only, with one state
+  for all targets). GL applies each target's blend state where it has indexed blending (`DeviceCaps::independentBlend`).
+- Both backends skip bindings that repeat the last one (pipelines, vertex and index buffers, uniform ranges, textures).
+- `UpdateBuffer` writes part of a uniform buffer where `DeviceCaps::uniformBufferPartialUpdates` says so; such writes do
+  not wait for the GPU, so the part must not be read by work still in flight (write a fresh part, free the old one
+  frames later).
+
+## Threaded mode
+
+With `DeviceDesc::threaded` a device thread owns the backend: it creates the backend device, and every call goes through
+one queue in order. Submits (copied), destroys, frame brackets, presents and resizes return at once; creations, reads,
+registrations and waits run on the device thread while the caller waits for their result. Transient memory comes from
+a ring of this layer and is copied into the backend's ring when the device thread submits the list that binds it; the
+memory is reused once the device thread has taken the submit (outside frames) or the frame's end. `Present` waits while
+more than `DeviceDesc::maxQueuedFrames` frames are queued. `Device::Threaded()` tells which mode a device is in. Where
+there are no threads (the Web) the flag is ignored.
+
 ## Compute, storage and indirect
 
 - `CreateComputePipeline` takes a compute shader; `SetPipeline` selects it for `Dispatch` and `DispatchIndirect`.
@@ -123,7 +146,7 @@ the tests use.
 The tests render offscreen on every available backend and check pixels: clear, triangle
 orientation, transient uniforms with scissor, texture sampling orientation, instanced indexed
 quads, depth testing, swap chain presentation, bindless textures and buffers, compute into storage buffers and
-textures, a GPU driven indirect draw, multisampled targets resolved, draws into mips and layers, subresource copies and generated mips, every block format a device offers decoded by the GPU against the Helix.Image decoders, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads and a 10000 draw benchmark. 
+textures, a GPU driven indirect draw, multisampled targets resolved, draws into mips and layers, subresource copies and generated mips, every block format a device offers decoded by the GPU against the Helix.Image decoders, GPU timer scopes, transient ring wrapping across submits, command lists recorded on worker threads, stencil, depth bias and clip, conservative rasterization, alpha to coverage, logical operations, uniform buffers updated in parts, instances reading their index and a 10000 draw benchmark. `HELIX_RHI_THREADED=1` runs every test on devices of the threaded mode (CTest does it once more as `helix_rhi_tests_threaded`), `HELIX_RHI_WARP=1` on the WARP rasterizer instead of the D3D11 adapters.
 The shaders of the tests and the example are in `Tests/Support/CompiledShaders.h`: GLSL, GLSL ES and Direct3D bytecode
 generated from C# sources by Helix.ShaderCompiler (its `export_rhi_shaders` target; the sources are in its
 `Tests/Shaders/Rhi`). This library sits below that compiler, so the generated file is checked in. No shader is written

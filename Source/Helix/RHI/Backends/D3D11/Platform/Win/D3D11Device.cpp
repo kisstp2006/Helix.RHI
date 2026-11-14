@@ -77,6 +77,22 @@ namespace helix::rhi
 
         D3D11_COMPARISON_FUNC ToCompare(CompareFunction f) { return D3D11_COMPARISON_FUNC(int(f) + 1); }
 
+        D3D11_STENCIL_OP ToStencilOp(StencilOp o) { return D3D11_STENCIL_OP(int(o) + 1); }
+
+        D3D11_DEPTH_STENCILOP_DESC ToStencilFace(const StencilFace& f)
+        {
+            return {ToStencilOp(f.fail), ToStencilOp(f.depthFail), ToStencilOp(f.pass), ToCompare(f.compare)};
+        }
+
+        D3D11_LOGIC_OP ToLogicOp(LogicOp o)
+        {
+            static const D3D11_LOGIC_OP map[] = {D3D11_LOGIC_OP_CLEAR,  D3D11_LOGIC_OP_SET,           D3D11_LOGIC_OP_COPY,          D3D11_LOGIC_OP_COPY_INVERTED,
+                                                 D3D11_LOGIC_OP_NOOP,   D3D11_LOGIC_OP_INVERT,        D3D11_LOGIC_OP_AND,           D3D11_LOGIC_OP_NAND,
+                                                 D3D11_LOGIC_OP_OR,     D3D11_LOGIC_OP_NOR,           D3D11_LOGIC_OP_XOR,           D3D11_LOGIC_OP_EQUIV,
+                                                 D3D11_LOGIC_OP_AND_REVERSE, D3D11_LOGIC_OP_AND_INVERTED, D3D11_LOGIC_OP_OR_REVERSE, D3D11_LOGIC_OP_OR_INVERTED};
+            return map[int(o)];
+        }
+
         D3D11_BLEND ToBlend(BlendFactor f)
         {
             static const D3D11_BLEND map[] = {D3D11_BLEND_ZERO,      D3D11_BLEND_ONE,           D3D11_BLEND_SRC_COLOR,  D3D11_BLEND_INV_SRC_COLOR,
@@ -220,6 +236,8 @@ namespace helix::rhi
         public:
             ID3D11Device* device = nullptr;
             ID3D11Device1* device1 = nullptr;
+            ID3D11Device3* device3 = nullptr;
+            u32 stencilReference = 0;
             ID3D11DeviceContext* context = nullptr;
             ID3D11DeviceContext1* context1 = nullptr;
             IDXGISwapChain1* swapChain = nullptr;
@@ -318,6 +336,7 @@ namespace helix::rhi
                 if (Failed(hr))
                     return false;
                 device->QueryInterface(&device1);
+                device->QueryInterface(&device3);
                 context->QueryInterface(&context1);
 
                 caps.backend = Backend::D3D11;
@@ -347,7 +366,17 @@ namespace helix::rhi
                 }
                 D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
                 if (Succeeded(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))))
+                {
                     caps.uniformBufferOffsets = context1 && options.ConstantBufferOffsetting && options.MapNoOverwriteOnDynamicConstantBuffer;
+                    caps.logicOps = device1 && options.OutputMergerLogicOp;
+                    caps.uniformBufferPartialUpdates = context1 && options.ConstantBufferPartialUpdate;
+                }
+                D3D11_FEATURE_DATA_D3D11_OPTIONS2 options2{};
+                caps.conservativeRasterization =
+                    device3 && Succeeded(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS2, &options2, sizeof(options2))) &&
+                    options2.ConservativeRasterizationTier != D3D11_CONSERVATIVE_RASTERIZATION_NOT_SUPPORTED;
+                caps.depthClamp = true;
+                caps.independentBlend = true;
                 caps.uniformBufferAlignment = 256;
                 caps.bindlessTextures = level >= D3D_FEATURE_LEVEL_11_0;
                 caps.bindlessEmulated = true;
@@ -485,6 +514,7 @@ namespace helix::rhi
                 Release(context1);
                 Release(context);
                 Release(device1);
+                Release(device3);
                 Release(device);
             }
 
@@ -925,29 +955,65 @@ namespace helix::rhi
                     ReleasePipeline(p);
                     return {};
                 }
-                D3D11_RASTERIZER_DESC rd{};
+                D3D11_RASTERIZER_DESC2 rd{};
                 rd.FillMode = desc.wireframe ? D3D11_FILL_WIREFRAME : D3D11_FILL_SOLID;
                 rd.CullMode = D3D11_CULL_MODE(int(desc.cull) + 1);
                 rd.FrontCounterClockwise = desc.frontCounterClockwise;
-                rd.DepthClipEnable = 1;
+                rd.DepthBias = desc.depthBias;
+                rd.DepthBiasClamp = desc.depthBiasClamp;
+                rd.SlopeScaledDepthBias = desc.depthBiasSlope;
+                rd.DepthClipEnable = desc.depthClip;
                 rd.ScissorEnable = 1;
                 rd.MultisampleEnable = desc.sampleCount > 1;
-                device->CreateRasterizerState(&rd, &p.raster);
+                rd.ConservativeRaster = desc.conservative && caps.conservativeRasterization ? D3D11_CONSERVATIVE_RASTERIZATION_MODE_ON
+                                                                                          : D3D11_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+                if (rd.ConservativeRaster == D3D11_CONSERVATIVE_RASTERIZATION_MODE_ON)
+                    device3->CreateRasterizerState2(&rd, &p.raster);
+                else
+                {
+                    // The first fields of the newer descriptions are the plain one's.
+                    D3D11_RASTERIZER_DESC plain{};
+                    std::memcpy(&plain, &rd, sizeof(plain));
+                    device->CreateRasterizerState(&plain, &p.raster);
+                }
                 D3D11_DEPTH_STENCIL_DESC dd{};
                 dd.DepthEnable = desc.depthTest || desc.depthWrite;
                 dd.DepthWriteMask = desc.depthWrite ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
                 dd.DepthFunc = desc.depthTest ? ToCompare(desc.depthCompare) : D3D11_COMPARISON_ALWAYS;
-                dd.FrontFace = dd.BackFace = {D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_KEEP, D3D11_COMPARISON_ALWAYS};
+                dd.StencilEnable = desc.stencil.enabled;
+                dd.StencilReadMask = desc.stencil.readMask;
+                dd.StencilWriteMask = desc.stencil.writeMask;
+                dd.FrontFace = ToStencilFace(desc.stencil.front);
+                dd.BackFace = ToStencilFace(desc.stencil.back);
                 device->CreateDepthStencilState(&dd, &p.depth);
-                D3D11_BLEND_DESC bd{};
-                bd.IndependentBlendEnable = 1;
+                D3D11_BLEND_DESC1 bd{};
+                bd.AlphaToCoverageEnable = desc.alphaToCoverage;
+                // Logical operations take the first target's state for all (Direct3D 11.1 refuses independent ones).
+                bool logic = desc.logicOpEnabled && caps.logicOps;
+                bd.IndependentBlendEnable = !logic;
                 for (u32 i = 0; i < kMaxColorTargets; i++)
                 {
                     const BlendState& b = desc.blend[i];
-                    bd.RenderTarget[i] = {b.enabled, ToBlend(b.srcColor), ToBlend(b.dstColor), ToBlendOp(b.colorOp), ToBlend(b.srcAlpha),
-                                          ToBlend(b.dstAlpha), ToBlendOp(b.alphaOp), UINT8(b.writeMask)};
+                    bd.RenderTarget[i] = {logic ? BOOL(0) : BOOL(b.enabled), BOOL(logic), ToBlend(b.srcColor), ToBlend(b.dstColor), ToBlendOp(b.colorOp),
+                                          ToBlend(b.srcAlpha), ToBlend(b.dstAlpha), ToBlendOp(b.alphaOp), ToLogicOp(desc.logicOp), UINT8(b.writeMask)};
                 }
-                device->CreateBlendState(&bd, &p.blend);
+                if (device1)
+                {
+                    ID3D11BlendState1* blend1 = nullptr;
+                    device1->CreateBlendState1(&bd, &blend1);
+                    p.blend = blend1;
+                }
+                else
+                {
+                    D3D11_BLEND_DESC plain{bd.AlphaToCoverageEnable, bd.IndependentBlendEnable, {}};
+                    for (u32 i = 0; i < kMaxColorTargets; i++)
+                    {
+                        const D3D11_RENDER_TARGET_BLEND_DESC1& t = bd.RenderTarget[i];
+                        plain.RenderTarget[i] = {t.BlendEnable, t.SrcBlend, t.DestBlend, t.BlendOp, t.SrcBlendAlpha, t.DestBlendAlpha, t.BlendOpAlpha,
+                                                 t.RenderTargetWriteMask};
+                    }
+                    device->CreateBlendState(&plain, &p.blend);
+                }
                 return pipelines.Add(Move(p));
             }
 
@@ -1400,6 +1466,11 @@ namespace helix::rhi
                 UploadBindless();
                 UploadBufferTable();
                 Pipeline* pipeline = nullptr;
+                if (stencilReference != 0)
+                {
+                    stencilReference = 0;
+                    appliedPipeline = nullptr;
+                }
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)
                     {
@@ -1482,7 +1553,7 @@ namespace helix::rhi
                         context->VSSetShader(pipeline->vs, nullptr, 0);
                         context->PSSetShader(pipeline->ps, nullptr, 0);
                         context->RSSetState(pipeline->raster);
-                        context->OMSetDepthStencilState(pipeline->depth, 0);
+                        context->OMSetDepthStencilState(pipeline->depth, stencilReference);
                         context->OMSetBlendState(pipeline->blend, nullptr, D3D11_DEFAULT_SAMPLE_MASK);
                         break;
                     }
@@ -1579,8 +1650,11 @@ namespace helix::rhi
                         {
                             u32 at = c.offset + b->heapOffset;
                             D3D11_BOX box{at, 0, 0, at + c.size, 1, 1};
-                            bool whole = b->desc.usage & BufferUniform;
-                            context->UpdateSubresource(b->buffer, 0, whole ? nullptr : &box, bytes, 0, 0);
+                            bool uniform = (b->desc.usage & BufferUniform) != 0;
+                            if (uniform && caps.uniformBufferPartialUpdates && (c.offset != 0 || c.size != b->desc.size))
+                                context1->UpdateSubresource1(b->buffer, 0, &box, bytes, 0, 0, D3D11_COPY_NO_OVERWRITE);
+                            else
+                                context->UpdateSubresource(b->buffer, 0, uniform ? nullptr : &box, bytes, 0, 0);
                         }
                         break;
                     }
@@ -1685,6 +1759,13 @@ namespace helix::rhi
                             context->CopySubresourceRegion(to, Subresource(c.destinationMip, destinationLayer, destinationMips), 0, 0, 0, from,
                                                            Subresource(c.sourceMip, sourceLayer, sourceMips), nullptr);
                         }
+                        break;
+                    }
+                    case CommandType::SetStencilReference:
+                    {
+                        stencilReference = CommandData<CmdSetStencilReference>(data).reference;
+                        if (appliedPipeline)
+                            context->OMSetDepthStencilState(appliedPipeline->depth, stencilReference);
                         break;
                     }
                     case CommandType::GenerateMips:

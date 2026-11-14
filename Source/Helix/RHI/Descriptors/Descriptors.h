@@ -319,6 +319,57 @@ namespace helix::rhi
         u8 writeMask = 0xF;
     };
 
+    enum class StencilOp : u8
+    {
+        Keep,
+        Zero,
+        Replace,
+        IncrementSaturate,
+        DecrementSaturate,
+        Invert,
+        IncrementWrap,
+        DecrementWrap,
+    };
+
+    struct StencilFace
+    {
+        CompareFunction compare = CompareFunction::Always;
+        StencilOp pass = StencilOp::Keep;
+        StencilOp fail = StencilOp::Keep;
+        StencilOp depthFail = StencilOp::Keep;
+    };
+
+    // Needs a depth format with stencil (D24UnormS8Uint); the reference value comes from SetStencilReference.
+    struct StencilState
+    {
+        bool enabled = false;
+        u8 readMask = 0xFF;
+        u8 writeMask = 0xFF;
+        StencilFace front;
+        StencilFace back;
+    };
+
+    // Logical operations on the color written (DeviceCaps::logicOps; on D3D11 only into UINT targets).
+    enum class LogicOp : u8
+    {
+        Clear,
+        Set,
+        Copy,
+        CopyInverted,
+        Noop,
+        Invert,
+        And,
+        Nand,
+        Or,
+        Nor,
+        Xor,
+        Equivalent,
+        AndReverse,
+        AndInverted,
+        OrReverse,
+        OrInverted,
+    };
+
     inline constexpr u32 kMaxColorTargets = 8;
     inline constexpr u32 kMaxVertexBuffers = 8;
     inline constexpr u32 kMaxVertexAttributes = 16;
@@ -350,6 +401,18 @@ namespace helix::rhi
         bool depthTest = false;
         bool depthWrite = false;
         CompareFunction depthCompare = CompareFunction::LessEqual;
+        StencilState stencil;
+        // Depth bias: constant units and a slope factor (D3D11 DepthBias / SlopeScaledDepthBias, GL polygon offset).
+        i32 depthBias = 0;
+        f32 depthBiasSlope = 0;
+        f32 depthBiasClamp = 0;
+        // Off: depths outside the range are clamped instead of clipped (DeviceCaps::depthClamp).
+        bool depthClip = true;
+        // Every pixel a triangle touches is covered (DeviceCaps::conservativeRasterization).
+        bool conservative = false;
+        bool alphaToCoverage = false;
+        bool logicOpEnabled = false;
+        LogicOp logicOp = LogicOp::Copy;
         BlendState blend[kMaxColorTargets]{};
         Format colorFormats[kMaxColorTargets]{};
         u32 colorTargetCount = 1;
@@ -458,6 +521,9 @@ namespace helix::rhi
         bool bindlessBuffers = false;
         bool baseInstance = false;
         bool uniformBufferOffsets = false;
+        // UpdateBuffer may write part of a uniform buffer (else only whole ones). Such writes do not wait for the GPU: the
+        // part must not be read by work still in flight (write a fresh part and free the old one frames later).
+        bool uniformBufferPartialUpdates = false;
         bool persistentMapping = false;
         bool clipControl = false;
         // BC1 to BC3; BC4 and BC5 (RGTC); BC6H and BC7 (BPTC).
@@ -471,6 +537,11 @@ namespace helix::rhi
         u32 maxTextureSize = 4096;
         // The most samples of a multisampled render target (1: none).
         u32 maxSamples = 1;
+        // PipelineDesc::depthClip off, conservative, logicOpEnabled; independent blend states per color target.
+        bool depthClamp = false;
+        bool conservativeRasterization = false;
+        bool logicOps = false;
+        bool independentBlend = false;
         // The formats of the swap chain's back buffer and depth buffer (Unknown without a window or depth).
         Format swapChainFormat = Format::Unknown;
         Format swapChainDepthFormat = Format::Unknown;

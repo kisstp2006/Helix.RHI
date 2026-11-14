@@ -34,6 +34,7 @@ namespace helix::rhi
         ResolveTexture,
         CopyTexture,
         GenerateMips,
+        SetStencilReference,
     };
 
     struct CommandHeader
@@ -179,6 +180,11 @@ namespace helix::rhi
         u32 destinationMip, destinationLayer;
     };
 
+    struct CmdSetStencilReference
+    {
+        u32 reference;
+    };
+
     struct CmdGenerateMips
     {
         TextureHandle texture;
@@ -194,6 +200,15 @@ namespace helix::rhi
         {
             bytes_.Clear();
             transient_.Clear();
+        }
+
+        // Another list's commands and transient ranges in place of these (keeps this list's memory).
+        void Assign(const CommandList& other)
+        {
+            bytes_.Clear();
+            transient_.Clear();
+            bytes_.Append(other.bytes_.Data(), other.bytes_.Size());
+            transient_.Append(other.transient_.Data(), other.transient_.Size());
         }
 
         struct TransientRange
@@ -308,6 +323,8 @@ namespace helix::rhi
         }
         // The mips below the first from it, of a texture that is a render target and sampled.
         void GenerateMips(TextureHandle texture) { Push(CommandType::GenerateMips, CmdGenerateMips{texture}); }
+        // The stencil reference value of the following draws (0 at the start of a submit).
+        void SetStencilReference(u32 reference) { Push(CommandType::SetStencilReference, CmdSetStencilReference{reference}); }
 
         template <typename F>
         void ForEach(F&& f) const
@@ -321,6 +338,23 @@ namespace helix::rhi
                 at += sizeof(h) + h.size;
             }
         }
+
+        // Each command with its payload size, for code that copies lists command by command.
+        template <typename F>
+        void ForEachSized(F&& f) const
+        {
+            usize at = 0;
+            while (at < bytes_.Size())
+            {
+                CommandHeader h;
+                std::memcpy(&h, bytes_.Data() + at, sizeof(h));
+                f(h.type, bytes_.Data() + at + sizeof(h), u32(h.size));
+                at += sizeof(h) + h.size;
+            }
+        }
+
+        // A command as another list recorded it (transient uniform bindings go through SetUniformBuffer instead).
+        void AppendRecorded(CommandType type, const u8* payload, u32 size) { std::memcpy(Header(type, size), payload, size); }
 
     private:
         u8* Header(CommandType type, u32 size)

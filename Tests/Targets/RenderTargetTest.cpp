@@ -149,6 +149,10 @@ HX_TEST(RenderTargets, MipsLayersCopiesAndGeneratedMips)
         two.Resize(4);
         HX_REQUIRE(d.ReadTexture(mipped, 1, two.Data(), 16));
         std::memcpy(quadrant, two.Data(), 16);
+        u32 lastMip = 0;
+        HX_REQUIRE(d.ReadTexture(mipped, 2, &lastMip, 4));
+        std::printf("    %s: mip 1 %08x %08x %08x %08x, mip 2 %08x\n", BackendName(d.Caps().backend), quadrant[0], quadrant[1], quadrant[2], quadrant[3],
+                    lastMip);
         HX_CHECK(Near(quadrant[0], Rgba(255, 0, 0), 2) && Near(quadrant[1], Rgba(0, 255, 0), 2) && Near(quadrant[2], Rgba(0, 0, 255), 2) &&
                  Near(quadrant[3], Rgba(255, 255, 255), 2));
         u32 last = 0;

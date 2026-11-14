@@ -1,5 +1,7 @@
 #include <Helix/RHI/Device/Device.h>
 
+#include <Helix/Platform/Threading/Thread.h>
+
 namespace helix::rhi
 {
     Device* CreateD3D11Device(const DeviceDesc& desc);
@@ -22,11 +24,20 @@ namespace helix::rhi
         return GLAvailable(backend);
     }
 
-    Device* Device::Create(const DeviceDesc& desc)
+    Device* CreateThreadedDevice(const DeviceDesc& desc);
+
+    Device* CreateBackendDevice(const DeviceDesc& desc)
     {
         if (desc.backend == Backend::D3D11)
             return CreateD3D11Device(desc);
         return CreateGLDevice(desc);
+    }
+
+    Device* Device::Create(const DeviceDesc& desc)
+    {
+        if (desc.threaded && platform::ThreadsSupported())
+            return CreateThreadedDevice(desc);
+        return CreateBackendDevice(desc);
     }
 
     void Device::Destroy(Device* device)

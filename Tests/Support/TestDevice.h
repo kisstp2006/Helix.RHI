@@ -6,6 +6,7 @@
 #include <Helix/Platform/Window/Window.h>
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace helix::rhi::testing
 {
@@ -90,7 +91,12 @@ namespace helix::rhi::testing
                 adapters++;
             for (i32 adapter = adapters ? 0 : -1; adapter < i32(adapters); adapter++)
             {
-                Device* device = Device::Create({.backend = b, .adapter = adapter, .vsync = false, .transientBufferSize = transientBufferSize});
+                // HELIX_RHI_THREADED=1: every test on devices of the threaded mode (a device thread owns the backend).
+                static const bool threaded = std::getenv("HELIX_RHI_THREADED") != nullptr;
+                // HELIX_RHI_WARP=1: the D3D11 software rasterizer instead of the adapters (as machines without a GPU have).
+                static const bool warp = std::getenv("HELIX_RHI_WARP") != nullptr;
+                Device* device = Device::Create({.backend = b, .adapter = adapter, .warp = warp && b == Backend::D3D11, .vsync = false,
+                                                 .transientBufferSize = transientBufferSize, .threaded = threaded});
                 if (!device)
                 {
                     std::printf("    %s: device creation failed, skipped\n", BackendName(b));

@@ -129,6 +129,23 @@ namespace helix::rhi
             return map[int(f)];
         }
 
+        GLenum ToStencilOp(StencilOp o)
+        {
+            static const GLenum map[] = {GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL_INVERT, GL_INCR_WRAP, GL_DECR_WRAP};
+            return map[int(o)];
+        }
+
+        GLenum ToLogicOp(LogicOp o)
+        {
+            static const GLenum map[] = {GL_CLEAR, GL_SET,   GL_COPY,  GL_COPY_INVERTED, GL_NOOP,         GL_INVERT,       GL_AND,         GL_NAND,
+                                         GL_OR,    GL_NOR,   GL_XOR,   GL_EQUIV,         GL_AND_REVERSE,  GL_AND_INVERTED, GL_OR_REVERSE,  GL_OR_INVERTED};
+            return map[int(o)];
+        }
+
+        // Conservative rasterization of the NVIDIA and Intel extensions (not in the core headers).
+        constexpr GLenum kConservativeNV = 0x9346;
+        constexpr GLenum kConservativeIntel = 0x83FE;
+
         GLenum ToBlend(BlendFactor f)
         {
             static const GLenum map[] = {GL_ZERO,      GL_ONE,         GL_SRC_COLOR,           GL_ONE_MINUS_SRC_COLOR, GL_SRC_ALPHA,
@@ -232,6 +249,33 @@ namespace helix::rhi
             GLContext* context = nullptr;
             DeviceCaps caps{};
             bool vsync = true;
+            GLenum conservativeMode = 0;
+            u32 stencilReference = 0;
+            // What the submit bound last, so repeated bindings are skipped (reset at each submit: other calls bind too).
+            struct UniformBinding
+            {
+                GLuint buffer;
+                GLintptr offset;
+                GLsizeiptr size;
+            };
+            struct TextureBinding
+            {
+                GLenum target;
+                GLuint texture;
+                GLuint sampler;
+            };
+            UniformBinding boundUniforms[kMaxUniformSlots] = {};
+            TextureBinding boundTextures[kMaxTextureSlots] = {};
+            GLuint boundIndexBuffer = 0;
+
+            void ResetBindingCache()
+            {
+                for (UniformBinding& u : boundUniforms)
+                    u = {~0u, -1, -1};
+                for (TextureBinding& t : boundTextures)
+                    t = {0, ~0u, ~0u};
+                boundIndexBuffer = ~0u;
+            }
             Pool<Buffer, BufferHandle> buffers;
             Pool<Texture, TextureHandle> textures;
             Pool<Sampler, SamplerHandle> samplers;
@@ -349,6 +393,14 @@ namespace helix::rhi
                 caps.baseInstance = !es && at(4, 2);
                 caps.uniformBufferOffsets = true;
                 caps.persistentMapping = !es && (at(4, 4) || HasExtension("GL_ARB_buffer_storage"));
+                caps.uniformBufferPartialUpdates = true;
+                caps.depthClamp = !es ? at(3, 2) : HasExtension("GL_EXT_depth_clamp");
+                caps.logicOps = !es && api.LogicOp != nullptr;
+                caps.independentBlend = (!es && at(4, 0)) || (es && at(3, 2)) || HasExtension("GL_EXT_draw_buffers_indexed");
+                conservativeMode = HasExtension("GL_NV_conservative_raster")              ? kConservativeNV
+                                   : HasExtension("GL_INTEL_conservative_rasterization") ? kConservativeIntel
+                                                                                         : 0;
+                caps.conservativeRasterization = conservativeMode != 0;
                 caps.clipControl = api.ClipControl != nullptr && (at(4, 5) || HasExtension("GL_ARB_clip_control") || HasExtension("GL_EXT_clip_control"));
                 caps.textureCompressionBC = HasExtension("GL_EXT_texture_compression_s3tc") || HasExtension("WEBGL_compressed_texture_s3tc");
                 caps.textureCompressionRGTC = (!es && at(3, 0)) || HasExtension("GL_ARB_texture_compression_rgtc") || HasExtension("GL_EXT_texture_compression_rgtc");
@@ -1164,20 +1216,82 @@ namespace helix::rhi
                 else
                     glDisable(GL_DEPTH_TEST);
                 glDepthMask(d.depthWrite ? GL_TRUE : GL_FALSE);
-                const BlendState& b = d.blend[0];
-                if (b.enabled)
+                ApplyStencil(d);
+                if (d.depthBias != 0 || d.depthBiasSlope != 0)
                 {
-                    glEnable(GL_BLEND);
-                    glBlendFuncSeparate(ToBlend(b.srcColor), ToBlend(b.dstColor), ToBlend(b.srcAlpha), ToBlend(b.dstAlpha));
-                    glBlendEquationSeparate(ToBlendOp(b.colorOp), ToBlendOp(b.alphaOp));
+                    glEnable(GL_POLYGON_OFFSET_FILL);
+                    glPolygonOffset(d.depthBiasSlope, f32(d.depthBias));
                 }
                 else
-                    glDisable(GL_BLEND);
-                glColorMask((b.writeMask & 1) != 0, (b.writeMask & 2) != 0, (b.writeMask & 4) != 0, (b.writeMask & 8) != 0);
+                    glDisable(GL_POLYGON_OFFSET_FILL);
+                if (caps.depthClamp)
+                    d.depthClip ? glDisable(GL_DEPTH_CLAMP) : glEnable(GL_DEPTH_CLAMP);
+                if (conservativeMode)
+                    d.conservative ? glEnable(conservativeMode) : glDisable(conservativeMode);
+                d.alphaToCoverage ? glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE) : glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+                if (caps.logicOps)
+                {
+                    if (d.logicOpEnabled)
+                    {
+                        glEnable(GL_COLOR_LOGIC_OP);
+                        glLogicOp(ToLogicOp(d.logicOp));
+                    }
+                    else
+                        glDisable(GL_COLOR_LOGIC_OP);
+                }
+                // Each target's blend state where the device has indexed ones, else the first target's for all.
+                u32 targets = caps.independentBlend ? Max(1u, d.colorTargetCount) : 1u;
+                for (u32 i = 0; i < targets; i++)
+                {
+                    const BlendState& b = d.blend[i];
+                    bool indexed = caps.independentBlend;
+                    if (b.enabled)
+                    {
+                        if (indexed)
+                        {
+                            glEnablei(GL_BLEND, i);
+                            glBlendFuncSeparatei(i, ToBlend(b.srcColor), ToBlend(b.dstColor), ToBlend(b.srcAlpha), ToBlend(b.dstAlpha));
+                            glBlendEquationSeparatei(i, ToBlendOp(b.colorOp), ToBlendOp(b.alphaOp));
+                        }
+                        else
+                        {
+                            glEnable(GL_BLEND);
+                            glBlendFuncSeparate(ToBlend(b.srcColor), ToBlend(b.dstColor), ToBlend(b.srcAlpha), ToBlend(b.dstAlpha));
+                            glBlendEquationSeparate(ToBlendOp(b.colorOp), ToBlendOp(b.alphaOp));
+                        }
+                    }
+                    else if (indexed)
+                        glDisablei(GL_BLEND, i);
+                    else
+                        glDisable(GL_BLEND);
+                    if (indexed)
+                        glColorMaski(i, (b.writeMask & 1) != 0, (b.writeMask & 2) != 0, (b.writeMask & 4) != 0, (b.writeMask & 8) != 0);
+                    else
+                        glColorMask((b.writeMask & 1) != 0, (b.writeMask & 2) != 0, (b.writeMask & 4) != 0, (b.writeMask & 8) != 0);
+                }
                 // OpenGL ES has no polygon mode, though some loaders still find the desktop entry point.
                 if (api.PolygonMode && caps.backend == Backend::OpenGL)
                     glPolygonMode(GL_FRONT_AND_BACK, d.wireframe ? GL_LINE : GL_FILL);
                 attributesDirty = true;
+            }
+
+            void ApplyStencil(const PipelineDesc& d)
+            {
+                if (!d.stencil.enabled)
+                {
+                    glDisable(GL_STENCIL_TEST);
+                    return;
+                }
+                glEnable(GL_STENCIL_TEST);
+                // The facing of GL's stencil faces follows glFrontFace, as the cull test does.
+                const StencilFace* faces[2] = {&d.stencil.front, &d.stencil.back};
+                const GLenum sides[2] = {GL_FRONT, GL_BACK};
+                for (u32 i = 0; i < 2; i++)
+                {
+                    glStencilFuncSeparate(sides[i], ToCompare(faces[i]->compare), GLint(stencilReference), d.stencil.readMask);
+                    glStencilOpSeparate(sides[i], ToStencilOp(faces[i]->fail), ToStencilOp(faces[i]->depthFail), ToStencilOp(faces[i]->pass));
+                }
+                glStencilMask(d.stencil.writeMask);
             }
 
             // An upper left clip origin also turns the facing test around, so the winding stays as in Direct3D.
@@ -1230,6 +1344,8 @@ namespace helix::rhi
                 UploadBindless();
                 UploadBufferTable();
                 glBindVertexArray(vao);
+                stencilReference = 0;
+                ResetBindingCache();
                 commands.ForEach([&](CommandType type, const u8* data) {
                     switch (type)
                     {
@@ -1261,6 +1377,7 @@ namespace helix::rhi
                         glDisable(GL_SCISSOR_TEST);
                         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                         glDepthMask(GL_TRUE);
+                        glStencilMask(0xFF);
                         appliedPipeline = {};
                         for (u32 i = 0; i < rp.colorCount; i++)
                             if (rp.colors[i].load == LoadOp::Clear)
@@ -1320,7 +1437,12 @@ namespace helix::rhi
                     {
                         const CmdSetIndexBuffer& c = CommandData<CmdSetIndexBuffer>(data);
                         Buffer* b = buffers.Get(c.buffer);
-                        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, b ? b->id : 0);
+                        GLuint id = b ? b->id : 0;
+                        if (id != boundIndexBuffer)
+                        {
+                            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, id);
+                            boundIndexBuffer = id;
+                        }
                         indexType = c.type == IndexType::U16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
                         indexOffset = c.offset + (b ? b->heapOffset : 0);
                         break;
@@ -1329,7 +1451,15 @@ namespace helix::rhi
                     {
                         const CmdSetUniformBuffer& c = CommandData<CmdSetUniformBuffer>(data);
                         if (Buffer* b = buffers.Get(c.buffer))
-                            glBindBufferRange(GL_UNIFORM_BUFFER, c.slot, b->id, GLintptr(c.offset), GLsizeiptr(c.size));
+                        {
+                            UniformBinding next{b->id, GLintptr(c.offset), GLsizeiptr(c.size)};
+                            UniformBinding& bound = boundUniforms[c.slot];
+                            if (bound.buffer != next.buffer || bound.offset != next.offset || bound.size != next.size)
+                            {
+                                glBindBufferRange(GL_UNIFORM_BUFFER, c.slot, next.buffer, next.offset, next.size);
+                                bound = next;
+                            }
+                        }
                         break;
                     }
                     case CommandType::SetTexture:
@@ -1337,9 +1467,14 @@ namespace helix::rhi
                         const CmdSetTexture& c = CommandData<CmdSetTexture>(data);
                         Texture* t = textures.Get(c.texture);
                         Sampler* s = samplers.Get(c.sampler);
+                        TextureBinding next{t ? t->target : GLenum(GL_TEXTURE_2D), t ? t->id : 0, s ? s->id : 0};
+                        TextureBinding& bound = boundTextures[c.slot];
+                        if (bound.target == next.target && bound.texture == next.texture && bound.sampler == next.sampler)
+                            break;
                         glActiveTexture(GL_TEXTURE0 + c.slot);
-                        glBindTexture(t ? t->target : GL_TEXTURE_2D, t ? t->id : 0);
-                        glBindSampler(c.slot, s ? s->id : 0);
+                        glBindTexture(next.target, next.texture);
+                        glBindSampler(c.slot, next.sampler);
+                        bound = next;
                         break;
                     }
                     case CommandType::Draw:
@@ -1504,6 +1639,13 @@ namespace helix::rhi
                         Blit(c.source, c.sourceMip, c.sourceLayer, c.destination, c.destinationMip, c.destinationLayer);
                         break;
                     }
+                    case CommandType::SetStencilReference:
+                    {
+                        stencilReference = CommandData<CmdSetStencilReference>(data).reference;
+                        if (pipeline)
+                            ApplyStencil(pipeline->desc);
+                        break;
+                    }
                     case CommandType::GenerateMips:
                     {
                         if (Texture* t = textures.Get(CommandData<CmdGenerateMips>(data).texture); t && t->id)
@@ -1511,6 +1653,7 @@ namespace helix::rhi
                             Barrier();
                             glBindTexture(t->target, t->id);
                             glGenerateMipmap(t->target);
+                            ResetBindingCache();
                         }
                         break;
                     }
