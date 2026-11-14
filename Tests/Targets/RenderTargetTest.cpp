@@ -120,18 +120,12 @@ HX_TEST(RenderTargets, MipsLayersCopiesAndGeneratedMips)
         CommandList cl;
         // A 4 x 4 texture of four colored quadrants with three mips: the second mip has the quadrants' colors, the last
         // their average.
-        u32 texels[16];
-        for (u32 y = 0; y < 4; y++)
-            for (u32 x = 0; x < 4; x++)
-                texels[y * 4 + x] = y < 2 ? (x < 2 ? Rgba(255, 0, 0) : Rgba(0, 255, 0)) : (x < 2 ? Rgba(0, 0, 255) : Rgba(255, 255, 255));
-        std::printf("    the data %08x %08x %08x %08x %08x\n", texels[0], texels[3], texels[4], texels[12], texels[15]);
+        // Written out: the CI's MSVC (release) filled the first two rows of the same data made by a loop of selects with zeros.
+        constexpr u32 R = Rgba(255, 0, 0), G = Rgba(0, 255, 0), B = Rgba(0, 0, 255), W = Rgba(255, 255, 255);
+        const u32 texels[16] = {R, R, G, G, R, R, G, G, B, B, W, W, B, B, W, W};
         TextureHandle mipped = d.CreateTexture({.format = Format::RGBA8Unorm, .width = 4, .height = 4, .mipLevels = 3,
                                                 .usage = TextureSampled | TextureRenderTarget, .initialData = texels});
         HX_REQUIRE(mipped.IsValid());
-        // The first mip as created (a CI run on WARP in release found its top half missing).
-        u32 created[16] = {};
-        HX_REQUIRE(d.ReadTexture(mipped, 0, created, sizeof(created)));
-        std::printf("    %s %s: mip 0 at creation %08x %08x %08x %08x\n", BackendName(d.Caps().backend), d.Caps().renderer, created[0], created[3], created[12], created[15]);
         cl.GenerateMips(mipped);
         // The second mip copied into a texture of its own.
         TextureHandle copy = d.CreateTexture({.format = Format::RGBA8Unorm, .width = 2, .height = 2, .usage = TextureSampled | TextureRenderTarget});
@@ -154,9 +148,6 @@ HX_TEST(RenderTargets, MipsLayersCopiesAndGeneratedMips)
         two.Resize(4);
         HX_REQUIRE(d.ReadTexture(mipped, 1, two.Data(), 16));
         std::memcpy(quadrant, two.Data(), 16);
-        u32 first[16] = {};
-        HX_REQUIRE(d.ReadTexture(mipped, 0, first, sizeof(first)));
-        std::printf("    mip 0 after the mips %08x %08x %08x %08x\n", first[0], first[3], first[12], first[15]);
         u32 lastMip = 0;
         HX_REQUIRE(d.ReadTexture(mipped, 2, &lastMip, 4));
         std::printf("    %s: mip 1 %08x %08x %08x %08x, mip 2 %08x\n", BackendName(d.Caps().backend), quadrant[0], quadrant[1], quadrant[2], quadrant[3],
