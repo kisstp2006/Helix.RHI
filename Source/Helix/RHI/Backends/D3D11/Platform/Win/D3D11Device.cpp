@@ -1785,6 +1785,8 @@ namespace helix::rhi
                         {
                             context->OMSetRenderTargets(0, nullptr, nullptr);
                             context->GenerateMips(t->srv);
+                            // WARP of some Windows versions copied the mips out of order with later work without it.
+                            context->Flush();
                         }
                         break;
                     }
