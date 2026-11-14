@@ -814,14 +814,24 @@ namespace helix::rhi
                     if ((bind & D3D11_BIND_RENDER_TARGET) && (bind & D3D11_BIND_SHADER_RESOURCE) && desc.mipLevels > 1)
                         td.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
                     ID3D11Texture2D* tex = nullptr;
-                    bool withData = desc.initialData && desc.mipLevels == 1;
-                    if (Failed(device->CreateTexture2D(&td, withData ? init.Data() : nullptr, &tex)))
+                    // With mips the data is the first mip of each layer; the other mips start as zeros. All of it goes in at
+                    // creation (a separate upload of the first mips came out half written on some WARP versions).
+                    Array<D3D11_SUBRESOURCE_DATA> all;
+                    Array<u8> zeros;
+                    if (desc.initialData && desc.mipLevels > 1)
+                    {
+                        zeros.Resize(imageBytes);
+                        std::memset(zeros.Data(), 0, zeros.Size());
+                        for (u32 i = 0; i < layers; i++)
+                            for (u32 m = 0; m < desc.mipLevels; m++)
+                                all.Push(m == 0 ? init[i]
+                                                : D3D11_SUBRESOURCE_DATA{zeros.Data(), FormatRowBytes(desc.format, Max(1u, desc.width >> m)),
+                                                                         u32(FormatImageBytes(desc.format, Max(1u, desc.width >> m), Max(1u, desc.height >> m)))});
+                    }
+                    const D3D11_SUBRESOURCE_DATA* data = !desc.initialData ? nullptr : desc.mipLevels > 1 ? all.Data() : init.Data();
+                    if (Failed(device->CreateTexture2D(&td, data, &tex)))
                         return {};
                     t.resource = tex;
-                    // With mips the data is the first mip of each layer.
-                    if (desc.initialData && !withData)
-                        for (u32 i = 0; i < layers; i++)
-                            context->UpdateSubresource(tex, Subresource(0, i, desc.mipLevels), nullptr, init[i].pSysMem, rowBytes, imageBytes);
                 }
                 if (bind & D3D11_BIND_SHADER_RESOURCE)
                 {
