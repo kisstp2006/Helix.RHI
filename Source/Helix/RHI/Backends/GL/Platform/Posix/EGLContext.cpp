@@ -80,6 +80,8 @@ namespace helix::rhi
                 const EGLint esVersions[][2] = {{3, 2}, {3, 1}, {3, 0}};
                 for (const auto& v : es ? Span<const EGLint[2]>(esVersions) : Span<const EGLint[2]>(versions))
                 {
+                    if (desc.maxGLVersion && u32(v[0] * 10 + v[1]) > desc.maxGLVersion)
+                        continue;
                     const EGLint attribs[] = {EGL_CONTEXT_MAJOR_VERSION, v[0], EGL_CONTEXT_MINOR_VERSION, v[1],
                                               EGLint(es ? EGL_NONE : EGL_CONTEXT_OPENGL_PROFILE_MASK), EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
                     context = eglCreateContext(display, config, EGL_NO_CONTEXT, attribs);

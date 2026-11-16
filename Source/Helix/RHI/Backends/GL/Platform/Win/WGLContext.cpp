@@ -104,6 +104,8 @@ namespace helix::rhi
                     int profile = es ? int(wgl::WGL_CONTEXT_ES2_PROFILE_BIT_EXT) : int(wgl::WGL_CONTEXT_CORE_PROFILE_BIT_ARB);
                     for (auto& v : es ? Span<const int[2]>(esVersions) : Span<const int[2]>(versions))
                     {
+                        if (desc.maxGLVersion && u32(v[0] * 10 + v[1]) > desc.maxGLVersion)
+                            continue;
                         const int attribs[] = {int(wgl::WGL_CONTEXT_MAJOR_VERSION_ARB), v[0], int(wgl::WGL_CONTEXT_MINOR_VERSION_ARB), v[1],
                                                int(wgl::WGL_CONTEXT_PROFILE_MASK_ARB), profile,
                                                int(wgl::WGL_CONTEXT_FLAGS_ARB), desc.debug ? int(wgl::WGL_CONTEXT_DEBUG_BIT_ARB) : 0, 0};

@@ -24,6 +24,9 @@ namespace helix::rhi
         i32 adapter = -1;
         // D3D11: the WARP software rasterizer instead of a hardware adapter.
         bool warp = false;
+        // OpenGL and OpenGL ES: the newest version the context may have, major * 10 + minor (33: an OpenGL 3.3 core
+        // context, as the oldest devices a pipeline supports have); 0: the newest the driver gives.
+        u32 maxGLVersion = 0;
         bool debug = false;
         bool vsync = true;
         // The depth buffer of the swap chain (render passes to the back buffer use it); Unknown for none. OpenGL's

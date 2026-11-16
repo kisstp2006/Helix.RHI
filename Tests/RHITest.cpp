@@ -639,3 +639,24 @@ HX_TEST(RHI, WarpOnRequest)
     Device::Destroy(d);
 #endif
 }
+
+HX_TEST(RHI, OpenGLContextKeptAtAVersion)
+{
+    // maxGLVersion 33: an OpenGL 3.3 core context (the oldest desktop GL the pipelines support), drawing as the newest.
+    if (!Device::IsBackendAvailable(Backend::OpenGL))
+        return;
+    Device* d = Device::Create({.backend = Backend::OpenGL, .maxGLVersion = 33, .vsync = false});
+    HX_REQUIRE(d != nullptr);
+    std::printf("    OpenGL %u.%u on %s\n", d->Caps().apiMajor, d->Caps().apiMinor, d->Caps().renderer);
+    HX_CHECK(d->Caps().apiMajor == 3 && d->Caps().apiMinor == 3);
+    {
+        Target t(d);
+        CommandList cl;
+        cl.BeginRenderPass(t.Pass(0.25f, 0.5f, 0.75f, 1.0f));
+        cl.EndRenderPass();
+        d->Submit(cl);
+        HX_REQUIRE(t.Read());
+        HX_CHECK(NearColor(t.At(8, 8), 0xffbf8040u));
+    }
+    Device::Destroy(d);
+}
