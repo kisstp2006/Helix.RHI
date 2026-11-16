@@ -645,6 +645,11 @@ HX_TEST(RHI, OpenGLContextKeptAtAVersion)
     // maxGLVersion 33: an OpenGL 3.3 core context (the oldest desktop GL the pipelines support), drawing as the newest.
     if (!Device::IsBackendAvailable(Backend::OpenGL))
         return;
+    // Machines without a usable OpenGL (a GDI renderer) make no OpenGL device at all.
+    Device* newest = Device::Create({.backend = Backend::OpenGL, .vsync = false});
+    if (!newest)
+        return;
+    Device::Destroy(newest);
     Device* d = Device::Create({.backend = Backend::OpenGL, .maxGLVersion = 33, .vsync = false});
     HX_REQUIRE(d != nullptr);
     std::printf("    OpenGL %u.%u on %s\n", d->Caps().apiMajor, d->Caps().apiMinor, d->Caps().renderer);

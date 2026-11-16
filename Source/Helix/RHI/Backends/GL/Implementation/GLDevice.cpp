@@ -354,6 +354,13 @@ namespace helix::rhi
                 bool es = false;
                 GetVersion(major, minor, es);
                 es = es || context->IsES();
+                // A context kept at a version acts as that version where the driver made a newer compatible one (Mesa
+                // answers a 3.3 core request with its newest core version): its features are the version's.
+                if (!es && desc.maxGLVersion && u32(major * 10 + minor) > desc.maxGLVersion)
+                {
+                    major = int(desc.maxGLVersion / 10);
+                    minor = int(desc.maxGLVersion % 10);
+                }
                 auto at = [&](int ma, int mi) { return major > ma || (major == ma && minor >= mi); };
                 if ((es ? !at(3, 0) : !at(3, 3)) || !api.GenVertexArrays || !api.BindBufferRange || !api.GenSamplers)
                 {
