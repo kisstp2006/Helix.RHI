@@ -63,7 +63,8 @@ there are no threads (the Web) the flag is ignored.
 - `DrawIndirect`, `DrawIndexedIndirect` and `DispatchIndirect` read `DrawIndirectArgs`, `DrawIndexedIndirectArgs` and
   `DispatchIndirectArgs`, which have the same layout on every backend. Several draws use multi draw indirect where available.
 - Compute writes are visible to every later command: GL issues one memory barrier before the next command that may read them,
-  D3D11 binds UAVs only for the duration of a dispatch.
+  D3D11 binds UAVs only for the duration of a dispatch. A render pass's targets are unbound at its end, so a texture drawn
+  into is read by the next dispatch.
 - Requires D3D11 feature level 11_0, OpenGL 4.3 or OpenGL ES 3.1 (`DeviceCaps::compute`, `drawIndirect`); WebGL 2 has none.
 
 ## Bindless buffers

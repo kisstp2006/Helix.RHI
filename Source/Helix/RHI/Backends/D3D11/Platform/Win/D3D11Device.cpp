@@ -1530,6 +1530,9 @@ namespace helix::rhi
                         break;
                     }
                     case CommandType::EndRenderPass:
+                        // The targets go: a texture drawn into is read next (compute or another pass), and D3D11 hides
+                        // a resource bound for reading while it is still a render target.
+                        context->OMSetRenderTargets(0, nullptr, nullptr);
                         break;
                     case CommandType::SetViewport:
                     {
