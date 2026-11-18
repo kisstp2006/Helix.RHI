@@ -240,11 +240,18 @@ namespace helix::rhi
             u32 stencilReference = 0;
             ID3D11DeviceContext* context = nullptr;
             ID3D11DeviceContext1* context1 = nullptr;
-            IDXGISwapChain1* swapChain = nullptr;
-            ID3D11RenderTargetView* backBufferRtv = nullptr;
-            ID3D11Texture2D* backDepth = nullptr;
-            ID3D11DepthStencilView* backDepthDsv = nullptr;
-            u32 backBufferWidth = 0, backBufferHeight = 0;
+            // A swap chain: the device window's (main), or another window's (CreateSwapChain).
+            struct Chain
+            {
+                IDXGISwapChain1* swapChain = nullptr;
+                ID3D11RenderTargetView* rtv = nullptr;
+                ID3D11Texture2D* depth = nullptr;
+                ID3D11DepthStencilView* dsv = nullptr;
+                u32 width = 0, height = 0;
+                bool vsync = true;
+            };
+            Chain main;
+            Pool<Chain, SwapChainHandle> chains;
             bool tearing = false;
             bool vsync = true;
             DeviceCaps caps{};
@@ -409,11 +416,11 @@ namespace helix::rhi
                     }
                 }
                 if (desc.window.window)
-                    return CreateSwapChain(static_cast<HWND>(desc.window.window));
+                    return CreateChain(static_cast<HWND>(desc.window.window), main);
                 return true;
             }
 
-            bool CreateSwapChain(HWND hwnd)
+            bool CreateChain(HWND hwnd, Chain& c)
             {
                 IDXGIFactory2* factory = nullptr;
                 if (Failed(CreateDXGIFactory2(0, IDXGIFactory2::Iid, reinterpret_cast<void**>(&factory))))
@@ -435,24 +442,24 @@ namespace helix::rhi
                 sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
                 sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
                 sd.Flags = tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-                HRESULT hr = factory->CreateSwapChainForHwnd(device, hwnd, &sd, nullptr, nullptr, &swapChain);
+                HRESULT hr = factory->CreateSwapChainForHwnd(device, hwnd, &sd, nullptr, nullptr, &c.swapChain);
                 factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
                 Release(factory);
                 if (Failed(hr))
                     return false;
-                return CreateBackBufferView();
+                return CreateBackBufferView(c);
             }
 
-            bool CreateBackBufferView()
+            bool CreateBackBufferView(Chain& c)
             {
                 ID3D11Texture2D* backBuffer = nullptr;
-                if (Failed(swapChain->GetBuffer(0, ID3D11Texture2D::Iid, reinterpret_cast<void**>(&backBuffer))))
+                if (Failed(c.swapChain->GetBuffer(0, ID3D11Texture2D::Iid, reinterpret_cast<void**>(&backBuffer))))
                     return false;
                 D3D11_TEXTURE2D_DESC td{};
                 backBuffer->GetDesc(&td);
-                backBufferWidth = td.Width;
-                backBufferHeight = td.Height;
-                HRESULT hr = device->CreateRenderTargetView(backBuffer, nullptr, &backBufferRtv);
+                c.width = td.Width;
+                c.height = td.Height;
+                HRESULT hr = device->CreateRenderTargetView(backBuffer, nullptr, &c.rtv);
                 Release(backBuffer);
                 caps.swapChainFormat = Format::BGRA8Unorm;
                 if (Succeeded(hr) && caps.swapChainDepthFormat != Format::Unknown)
@@ -466,10 +473,36 @@ namespace helix::rhi
                     dd.SampleDesc = {1, 0};
                     dd.Usage = D3D11_USAGE_DEFAULT;
                     dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-                    if (Failed(device->CreateTexture2D(&dd, nullptr, &backDepth)) || Failed(device->CreateDepthStencilView(backDepth, nullptr, &backDepthDsv)))
+                    if (Failed(device->CreateTexture2D(&dd, nullptr, &c.depth)) || Failed(device->CreateDepthStencilView(c.depth, nullptr, &c.dsv)))
                         return false;
                 }
                 return Succeeded(hr);
+            }
+
+            static void ReleaseChain(Chain& c)
+            {
+                Release(c.dsv);
+                Release(c.depth);
+                Release(c.rtv);
+                Release(c.swapChain);
+            }
+
+            void ResizeChain(Chain& c, u32 width, u32 height)
+            {
+                if (!c.swapChain || (width == c.width && height == c.height) || !width || !height)
+                    return;
+                context->OMSetRenderTargets(0, nullptr, nullptr);
+                Release(c.dsv);
+                Release(c.depth);
+                Release(c.rtv);
+                c.swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+                CreateBackBufferView(c);
+            }
+
+            void PresentChain(Chain& c)
+            {
+                if (c.swapChain)
+                    c.swapChain->Present(c.vsync ? 1 : 0, !c.vsync && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
             }
 
             void Shutdown()
@@ -507,10 +540,8 @@ namespace helix::rhi
                 Release(heapUav);
                 Release(heapSrv);
                 Release(heap);
-                Release(backDepthDsv);
-                Release(backDepth);
-                Release(backBufferRtv);
-                Release(swapChain);
+                chains.ForEach([](Chain& c) { ReleaseChain(c); });
+                ReleaseChain(main);
                 Release(context1);
                 Release(context);
                 Release(device1);
@@ -1409,20 +1440,50 @@ namespace helix::rhi
 
             void Present() override
             {
-                if (swapChain)
-                    swapChain->Present(vsync ? 1 : 0, !vsync && tearing ? DXGI_PRESENT_ALLOW_TEARING : 0);
+                main.vsync = vsync;
+                PresentChain(main);
             }
 
-            void Resize(u32 width, u32 height) override
+            void Resize(u32 width, u32 height) override { ResizeChain(main, width, height); }
+
+            SwapChainHandle CreateSwapChain(const SwapChainDesc& desc) override
             {
-                if (!swapChain || (width == backBufferWidth && height == backBufferHeight) || !width || !height)
+                Chain c;
+                c.vsync = desc.vsync;
+                if (!desc.window.window || !CreateChain(static_cast<HWND>(desc.window.window), c))
+                {
+                    ReleaseChain(c);
+                    return {};
+                }
+                return chains.Add(Move(c));
+            }
+
+            void Destroy(SwapChainHandle handle) override
+            {
+                Chain c;
+                if (!chains.Remove(handle, c))
                     return;
                 context->OMSetRenderTargets(0, nullptr, nullptr);
-                Release(backDepthDsv);
-                Release(backDepth);
-                Release(backBufferRtv);
-                swapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
-                CreateBackBufferView();
+                ReleaseChain(c);
+            }
+
+            void Resize(SwapChainHandle handle, u32 width, u32 height) override
+            {
+                if (Chain* c = chains.Get(handle))
+                    ResizeChain(*c, width, height);
+            }
+
+            void Present(SwapChainHandle handle) override
+            {
+                if (Chain* c = chains.Get(handle))
+                    PresentChain(*c);
+            }
+
+            void SwapChainSize(SwapChainHandle handle, u32& width, u32& height) override
+            {
+                Chain* c = handle.IsValid() ? chains.Get(handle) : &main;
+                width = c ? c->width : 0;
+                height = c ? c->height : 0;
             }
 
             void WaitIdle() override
@@ -1487,8 +1548,12 @@ namespace helix::rhi
                     case CommandType::BeginRenderPass:
                     {
                         const RenderPassDesc& rp = CommandData<CmdBeginRenderPass>(data).desc;
+                        // The back buffer of the pass's swap chain (the device window's when none is named).
+                        Chain* chain = rp.swapChain.IsValid() ? chains.Get(rp.swapChain) : &main;
+                        if (!chain)
+                            chain = &main;
                         ID3D11RenderTargetView* rtvs[kMaxColorTargets] = {};
-                        u32 width = backBufferWidth, height = backBufferHeight;
+                        u32 width = chain->width, height = chain->height;
                         for (u32 i = 0; i < rp.colorCount; i++)
                         {
                             if (Texture* t = textures.Get(rp.colors[i].texture))
@@ -1498,7 +1563,7 @@ namespace helix::rhi
                                 height = Max(1u, t->desc.height >> rp.colors[i].mipLevel);
                             }
                             else
-                                rtvs[i] = backBufferRtv;
+                                rtvs[i] = chain->rtv;
                         }
                         Texture* depth = textures.Get(rp.depth.texture);
                         ID3D11DepthStencilView* dsv = depth ? DsvFor(*depth, rp.depth.mipLevel, rp.depth.layer) : nullptr;
@@ -1512,9 +1577,9 @@ namespace helix::rhi
                             // A pass to the back buffer takes the swap chain's depth buffer.
                             bool backBuffer = true;
                             for (u32 i = 0; i < rp.colorCount; i++)
-                                backBuffer = backBuffer && rtvs[i] == backBufferRtv;
+                                backBuffer = backBuffer && rtvs[i] == chain->rtv;
                             if (backBuffer)
-                                dsv = backDepthDsv;
+                                dsv = chain->dsv;
                         }
                         context->OMSetRenderTargets(rp.colorCount, rtvs, dsv);
                         ForgetBoundTextures();

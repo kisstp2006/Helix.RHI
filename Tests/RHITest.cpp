@@ -542,6 +542,105 @@ HX_TEST(RHI, SwapChainPresent)
 #endif
 }
 
+// Swap chains of other windows: a device on one window draws and presents a second window and a third, each pass
+// to its own back buffer and depth buffer (the device thread too); sizes follow the windows; destroyed before the
+// device.
+HX_TEST(RHI, SwapChainsOfOtherWindows)
+{
+#if HX_PLATFORM_WINDOWS || HX_PLATFORM_LINUX
+    if (!platform::Window::IsSupported())
+        return;
+    for (Backend b : {Backend::D3D11, Backend::OpenGL})
+        for (bool threaded : {false, true})
+        {
+            if (!Device::IsBackendAvailable(b))
+                continue;
+            platform::Window* window = platform::Window::Create({.title = "rhi", .width = 128, .height = 96, .visible = false});
+            platform::Window* second = platform::Window::Create({.title = "rhi 2", .width = 240, .height = 180, .visible = false});
+            platform::Window* third = platform::Window::Create({.title = "rhi 3", .width = 200, .height = 150, .visible = false});
+            HX_REQUIRE(window && second && third);
+            Device* d = Device::Create({.backend = b, .window = window->GetNativeHandle(), .vsync = false,
+                                        .swapChainDepthFormat = Format::D24UnormS8Uint, .threaded = threaded});
+            if (!d)
+            {
+                platform::Window::Destroy(third);
+                platform::Window::Destroy(second);
+                platform::Window::Destroy(window);
+                continue;
+            }
+            SwapChainHandle chains[2] = {d->CreateSwapChain({.window = second->GetNativeHandle()}),
+                                         d->CreateSwapChain({.window = third->GetNativeHandle()})};
+            HX_CHECK(chains[0].IsValid() && chains[1].IsValid() && !(chains[0] == chains[1]));
+            u32 w = 0, h = 0;
+            d->SwapChainSize(chains[0], w, h);
+            HX_CHECK(w == 240 && h == 180);
+            d->SwapChainSize(chains[1], w, h);
+            HX_CHECK(w == 200 && h == 150);
+            d->SwapChainSize(SwapChainHandle{}, w, h);
+            HX_CHECK(w == 128 && h == 96);
+            ShaderHandle vs = MakeShader(*d, kColorVertex);
+            ShaderHandle fs = MakeShader(*d, kColorFragment);
+            PipelineDesc pd = ColorPipeline(vs, fs);
+            pd.colorFormats[0] = d->Caps().swapChainFormat;
+            pd.depthFormat = d->Caps().swapChainDepthFormat;
+            pd.depthTest = true;
+            pd.depthWrite = true;
+            PipelineHandle pipe = d->CreatePipeline(pd);
+            HX_REQUIRE(pipe.IsValid());
+            const f32 verts[] = {-1, -1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, -1, 0, 0, 1, 1};
+            BufferHandle vb = d->CreateBuffer({.size = sizeof(verts), .usage = BufferVertex, .initialData = verts});
+            // An offscreen target between the windows' passes (the GL context goes back and forth between surfaces).
+            TextureHandle target = d->CreateTexture({.format = Format::RGBA8Unorm, .width = 16, .height = 16, .usage = TextureRenderTarget | TextureSampled});
+            helix::Array<platform::Event> events;
+            for (int frame = 0; frame < 3; frame++)
+            {
+                window->PollEvents(events);
+                d->BeginFrame();
+                CommandList cl;
+                for (SwapChainHandle chain : {SwapChainHandle{}, chains[0], chains[1]})
+                {
+                    RenderPassDesc rp;
+                    rp.swapChain = chain;
+                    rp.colors[0].clearColor[0] = chain.IsValid() ? 0.5f : 0.0f;
+                    cl.BeginRenderPass(rp);
+                    cl.SetPipeline(pipe);
+                    cl.SetVertexBuffer(0, vb);
+                    cl.Draw(3);
+                    cl.EndRenderPass();
+                    RenderPassDesc off;
+                    off.colors[0].texture = target;
+                    cl.BeginRenderPass(off);
+                    cl.EndRenderPass();
+                }
+                d->Submit(cl);
+                d->EndFrame();
+                d->Present(chains[0]);
+                d->Present(chains[1]);
+                d->Present();
+            }
+            // The offscreen target holds what its last pass cleared it to (the context's state stayed whole).
+            Array<u8> pixels;
+            pixels.Resize(16 * 16 * 4);
+            HX_CHECK(d->ReadTexture(target, 0, pixels.Data(), pixels.Size()));
+            HX_CHECK(pixels[3] == 255);
+            d->Resize(chains[0], 120, 90);
+            d->Destroy(chains[1]);
+            d->WaitIdle();
+            std::printf("    swap chains of other windows on %s%s %s\n", BackendName(b), threaded ? " (device thread)" : "", d->Caps().renderer);
+            d->Destroy(chains[0]);
+            d->Destroy(target);
+            d->Destroy(vb);
+            d->Destroy(pipe);
+            d->Destroy(vs);
+            d->Destroy(fs);
+            Device::Destroy(d);
+            platform::Window::Destroy(third);
+            platform::Window::Destroy(second);
+            platform::Window::Destroy(window);
+        }
+#endif
+}
+
 HX_TEST(RHI, BindlessTextures)
 {
     ForEachBackend([&](Device& d) {

@@ -32,13 +32,16 @@ namespace helix::rhi
             EndFrame,
             Present,
             Resize,
+            DestroySwapChain,
+            ResizeSwapChain,
+            PresentSwapChain,
             Quit,
         };
 
         struct Task
         {
             TaskKind kind = TaskKind::Call;
-            u32 a = 0, b = 0;
+            u32 a = 0, b = 0, c = 0;
             // The transient ring's head when queued, and whether taking this task frees the memory before it.
             u64 mark = 0;
             bool frees = false;
@@ -195,6 +198,25 @@ namespace helix::rhi
 
             void Resize(u32 width, u32 height) override { Queue({.kind = TaskKind::Resize, .a = width, .b = height}); }
 
+            SwapChainHandle CreateSwapChain(const SwapChainDesc& desc) override
+            {
+                return Call([&](Device& d) { return d.CreateSwapChain(desc); });
+            }
+            void Destroy(SwapChainHandle handle) override { Queue({.kind = TaskKind::DestroySwapChain, .a = handle.value}); }
+            void Resize(SwapChainHandle handle, u32 width, u32 height) override
+            {
+                Queue({.kind = TaskKind::ResizeSwapChain, .a = handle.value, .b = width, .c = height});
+            }
+            // Another window's present: in order with the frame's work, not counted as a frame.
+            void Present(SwapChainHandle handle) override { Queue({.kind = TaskKind::PresentSwapChain, .a = handle.value}); }
+            void SwapChainSize(SwapChainHandle handle, u32& width, u32& height) override
+            {
+                Call([&](Device& d) {
+                    d.SwapChainSize(handle, width, height);
+                    return 0;
+                });
+            }
+
             void WaitIdle() override
             {
                 Call([&](Device& d) {
@@ -293,6 +315,9 @@ namespace helix::rhi
                         case TaskKind::EndFrame: d.EndFrame(); break;
                         case TaskKind::Present: d.Present(); break;
                         case TaskKind::Resize: d.Resize(t.a, t.b); break;
+                        case TaskKind::DestroySwapChain: d.Destroy(SwapChainHandle{t.a}); break;
+                        case TaskKind::ResizeSwapChain: d.Resize(SwapChainHandle{t.a}, t.b, t.c); break;
+                        case TaskKind::PresentSwapChain: d.Present(SwapChainHandle{t.a}); break;
                         case TaskKind::Quit: quit = true; break;
                         }
                         platform::ScopedLock lock(mutex_);

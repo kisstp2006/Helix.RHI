@@ -42,6 +42,14 @@ namespace helix::rhi
         u32 maxQueuedFrames = 1;
     };
 
+    // A swap chain of another window: its back buffer in the device's swap chain format, a depth buffer of the
+    // device's swap chain depth format.
+    struct SwapChainDesc
+    {
+        platform::NativeWindowHandle window{};
+        bool vsync = true;
+    };
+
     class Device
     {
     public:
@@ -89,6 +97,15 @@ namespace helix::rhi
         virtual void EndFrame() = 0;
         virtual void Present() = 0;
         virtual void Resize(u32 width, u32 height) = 0;
+
+        // Swap chains of other windows (D3D11, desktop OpenGL; invalid where a device has one window only). A render
+        // pass draws to one by RenderPassDesc::swapChain; Present and Resize take it like the device window's.
+        virtual SwapChainHandle CreateSwapChain(const SwapChainDesc& desc) = 0;
+        virtual void Destroy(SwapChainHandle handle) = 0;
+        virtual void Resize(SwapChainHandle handle, u32 width, u32 height) = 0;
+        virtual void Present(SwapChainHandle handle) = 0;
+        // The size of a swap chain's back buffer (0 by 0 for none).
+        virtual void SwapChainSize(SwapChainHandle handle, u32& width, u32& height) = 0;
         virtual void WaitIdle() = 0;
 
         // Blocking read of a whole mip level as tightly packed rows, top row first.

@@ -247,6 +247,22 @@ namespace helix::rhi
         {
         public:
             GLContext* context = nullptr;
+            // Swap chains of other windows: surfaces the context is made current on; the one current now (null: the
+            // device window's).
+            struct Chain
+            {
+                void* surface = nullptr;
+            };
+            Pool<Chain, SwapChainHandle> chains;
+            void* currentSurface = nullptr;
+
+            void UseSurface(void* surface)
+            {
+                if (surface == currentSurface)
+                    return;
+                context->MakeCurrentOn(surface);
+                currentSurface = surface;
+            }
             DeviceCaps caps{};
             bool vsync = true;
             GLenum conservativeMode = 0;
@@ -998,6 +1014,7 @@ namespace helix::rhi
             void BeginFrame() override
             {
                 context->MakeCurrent();
+                currentSurface = nullptr;
                 deviceThread = platform::CurrentThreadId();
                 inFrame = true;
                 // Thread chunks end with the frame, see FenceTransient.
@@ -1115,8 +1132,55 @@ namespace helix::rhi
                     SetupAttributes(firstInstance);
                 return true;
             }
-            void Present() override { context->Swap(); }
+            void Present() override
+            {
+                UseSurface(nullptr);
+                context->Swap();
+            }
             void Resize(u32, u32) override {}
+
+            SwapChainHandle CreateSwapChain(const SwapChainDesc& desc) override
+            {
+                void* surface = context->CreateSurface(desc.window);
+                if (!surface)
+                    return {};
+                return chains.Add(Chain{surface});
+            }
+
+            void Destroy(SwapChainHandle handle) override
+            {
+                Chain c;
+                if (!chains.Remove(handle, c))
+                    return;
+                if (currentSurface == c.surface)
+                    UseSurface(nullptr);
+                context->DestroySurface(c.surface);
+            }
+
+            // A window's surface follows the window's size.
+            void Resize(SwapChainHandle, u32, u32) override {}
+
+            void Present(SwapChainHandle handle) override
+            {
+                Chain* c = chains.Get(handle);
+                if (!c)
+                    return;
+                UseSurface(c->surface);
+                // Only the device window waits for the display: several windows would wait once each.
+                context->SetSwapInterval(0);
+                context->SwapSurface(c->surface);
+                context->SetSwapInterval(vsync ? 1 : 0);
+                UseSurface(nullptr);
+            }
+
+            void SwapChainSize(SwapChainHandle handle, u32& width, u32& height) override
+            {
+                Chain* c = handle.IsValid() ? chains.Get(handle) : nullptr;
+                width = height = 0;
+                if (handle.IsValid() && !c)
+                    return;
+                context->GetSurfaceSize(c ? c->surface : nullptr, width, height);
+            }
             void WaitIdle() override { glFinish(); }
 
             // A texture's mip and layer (a cube's face) at an attachment point of the bound framebuffer.
@@ -1374,8 +1438,12 @@ namespace helix::rhi
                         }
                         else
                         {
+                            // The back buffer of the pass's swap chain: the context current on its surface.
+                            Chain* chain = rp.swapChain.IsValid() ? chains.Get(rp.swapChain) : nullptr;
+                            void* surface = chain ? chain->surface : nullptr;
+                            UseSurface(surface);
                             glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                            context->GetDrawableSize(width, height);
+                            context->GetSurfaceSize(surface, width, height);
                         }
                         targetHeight = height;
                         if (caps.clipControl)

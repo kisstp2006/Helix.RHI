@@ -26,6 +26,8 @@ namespace helix::rhi
     using SamplerHandle = Handle<struct SamplerTag>;
     using ShaderHandle = Handle<struct ShaderTag>;
     using PipelineHandle = Handle<struct PipelineTag>;
+    // A swap chain of another window than the device's (Device::CreateSwapChain).
+    using SwapChainHandle = Handle<struct SwapChainTag>;
 
     enum class Format : u8
     {
@@ -480,12 +482,14 @@ namespace helix::rhi
         u8 clearStencil = 0;
     };
 
-    // No color texture and no depth texture means the swap chain back buffer.
+    // No color texture and no depth texture means a swap chain's back buffer (and its depth buffer): the device
+    // window's, or the swap chain's of another window.
     struct RenderPassDesc
     {
         ColorAttachment colors[kMaxColorTargets]{};
         u32 colorCount = 1;
         DepthAttachment depth{};
+        SwapChainHandle swapChain{};
     };
 
     struct Viewport

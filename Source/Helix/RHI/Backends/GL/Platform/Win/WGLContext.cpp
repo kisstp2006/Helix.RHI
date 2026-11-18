@@ -33,6 +33,64 @@ namespace helix::rhi
             }
 
             bool MakeCurrent() override { return wgl::wglMakeCurrent(reinterpret_cast<wgl::HDC>(dc), context) != 0; }
+
+            // Another window: its device context in the pixel format of the context's.
+            struct Surface
+            {
+                HWND hwnd = nullptr;
+                HDC dc = nullptr;
+            };
+
+            void* CreateSurface(platform::NativeWindowHandle window) override
+            {
+                auto hwndOf = static_cast<HWND>(window.window);
+                if (!hwndOf || !pixelFormat)
+                    return nullptr;
+                HDC other = GetDC(hwndOf);
+                if (!other || !wgl::SetPixelFormat(reinterpret_cast<wgl::HDC>(other), pixelFormat, &pixelDesc))
+                {
+                    if (other)
+                        ReleaseDC(hwndOf, other);
+                    return nullptr;
+                }
+                auto* s = New<Surface>(HeapAllocator());
+                s->hwnd = hwndOf;
+                s->dc = other;
+                return s;
+            }
+
+            void DestroySurface(void* surface) override
+            {
+                auto* s = static_cast<Surface*>(surface);
+                if (!s)
+                    return;
+                ReleaseDC(s->hwnd, s->dc);
+                Delete(HeapAllocator(), s);
+            }
+
+            bool MakeCurrentOn(void* surface) override
+            {
+                auto* s = static_cast<Surface*>(surface);
+                return wgl::wglMakeCurrent(reinterpret_cast<wgl::HDC>(s ? s->dc : dc), context) != 0;
+            }
+
+            void SwapSurface(void* surface) override
+            {
+                auto* s = static_cast<Surface*>(surface);
+                wgl::SwapBuffers(reinterpret_cast<wgl::HDC>(s ? s->dc : dc));
+            }
+
+            void GetSurfaceSize(void* surface, u32& width, u32& height) override
+            {
+                auto* s = static_cast<Surface*>(surface);
+                RECT r{};
+                GetClientRect(s ? s->hwnd : hwnd, &r);
+                width = u32(r.right - r.left);
+                height = u32(r.bottom - r.top);
+            }
+
+            int pixelFormat = 0;
+            wgl::PIXELFORMATDESCRIPTOR pixelDesc{};
             void Swap() override { wgl::SwapBuffers(reinterpret_cast<wgl::HDC>(dc)); }
 
             void SetSwapInterval(int interval) override
@@ -83,6 +141,8 @@ namespace helix::rhi
                 int format = wgl::ChoosePixelFormat(hdc, &pfd);
                 if (!format || !wgl::SetPixelFormat(hdc, format, &pfd))
                     return false;
+                pixelFormat = format;
+                pixelDesc = pfd;
                 wgl::HGLRC legacy = wgl::wglCreateContext(hdc);
                 if (!legacy || !wgl::wglMakeCurrent(hdc, legacy))
                     return false;

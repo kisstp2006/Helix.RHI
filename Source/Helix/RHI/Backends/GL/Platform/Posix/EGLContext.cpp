@@ -31,6 +31,42 @@ namespace helix::rhi
             }
 
             bool MakeCurrent() override { return eglMakeCurrent(display, surface, surface, context) != 0; }
+
+            // Another window: a window surface of the context's config (none for a context of no window).
+            void* CreateSurface(platform::NativeWindowHandle window) override
+            {
+                if (!window.window || !windowed)
+                    return nullptr;
+                EGLSurface s = eglCreateWindowSurface(display, config, EGLNativeWindowType(window.window), nullptr);
+                return s == EGL_NO_SURFACE ? nullptr : s;
+            }
+
+            void DestroySurface(void* s) override
+            {
+                if (s)
+                    eglDestroySurface(display, EGLSurface(s));
+            }
+
+            bool MakeCurrentOn(void* s) override
+            {
+                EGLSurface on = s ? EGLSurface(s) : surface;
+                return eglMakeCurrent(display, on, on, context) != 0;
+            }
+
+            void SwapSurface(void* s) override { eglSwapBuffers(display, s ? EGLSurface(s) : surface); }
+
+            void GetSurfaceSize(void* s, u32& width, u32& height) override
+            {
+                EGLint w = 0, h = 0;
+                EGLSurface of = s ? EGLSurface(s) : surface;
+                eglQuerySurface(display, of, EGL_WIDTH, &w);
+                eglQuerySurface(display, of, EGL_HEIGHT, &h);
+                width = u32(w);
+                height = u32(h);
+            }
+
+            EGLConfig config = nullptr;
+            bool windowed = false;
             void Swap() override { eglSwapBuffers(display, surface); }
             void SetSwapInterval(int interval) override { eglSwapInterval(display, interval); }
 
@@ -59,11 +95,10 @@ namespace helix::rhi
                 EGLint major = 0, minor = 0;
                 if (display == EGL_NO_DISPLAY || !eglInitialize(display, &major, &minor))
                     return false;
-                bool windowed = desc.window.window != nullptr;
+                windowed = desc.window.window != nullptr;
                 const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGLint(windowed ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT), EGL_RENDERABLE_TYPE,
                                                 EGLint(es ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_BIT), EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
                                                 EGL_ALPHA_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8, EGL_NONE};
-                EGLConfig config = nullptr;
                 EGLint count = 0;
                 if (!eglChooseConfig(display, configAttribs, &config, 1, &count) || count == 0)
                     return false;
